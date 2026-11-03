@@ -178,3 +178,64 @@ export async function strategyStatus(id: string): Promise<StrategyStatus> {
   const r = await api.get(`/strategies/${encodeURIComponent(id)}/status`)
   return r.data
 }
+
+// ---------- 行情（D18） ----------
+
+export interface BarRow {
+  dt: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  amount: number
+}
+
+export async function getHistory(
+  symbol: string, freq: string, start?: string, end?: string,
+): Promise<BarRow[]> {
+  const r = await api.get<BarRow[]>('/market/history', {
+    params: { symbol, freq, start, end }, timeout: 30000,
+  })
+  return r.data
+}
+
+export async function getFreqs(symbol: string): Promise<string[]> {
+  const r = await api.get<string[]>('/market/freqs', { params: { symbol } })
+  return r.data
+}
+
+export interface TickSnapshot {
+  symbol: string
+  dt: string
+  last: number
+  open: number
+  high: number
+  low: number
+  volume: number
+  amount: number
+  bids: [number, number][]
+  asks: [number, number][]
+}
+
+export async function getSnapshot(symbol: string): Promise<TickSnapshot | null> {
+  const r = await api.get<TickSnapshot | null>('/market/snapshot', { params: { symbol } })
+  return r.data
+}
+
+export interface WatchItem { symbol: string; name: string; note: string }
+
+export async function getWatchlist(): Promise<WatchItem[]> {
+  const r = await api.get<WatchItem[]>('/market/watchlist')
+  return r.data
+}
+
+export async function addWatch(symbol: string, name = ''): Promise<WatchItem[]> {
+  const r = await api.post<WatchItem[]>('/market/watchlist', { symbol, name })
+  return r.data
+}
+
+export async function removeWatch(symbol: string): Promise<WatchItem[]> {
+  const r = await api.delete<WatchItem[]>(`/market/watchlist/${encodeURIComponent(symbol)}`)
+  return r.data
+}

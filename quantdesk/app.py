@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from quantdesk import __version__
 from quantdesk.api.routes_backtest import router as backtest_router
+from quantdesk.api.routes_market import router as market_router
 from quantdesk.api.routes_strategy import router as strategy_router
 from quantdesk.api.routes_trading import router as trading_router
 from quantdesk.api.ws import router as ws_router
@@ -31,6 +32,7 @@ app = FastAPI(title="QuantDesk", version=__version__, lifespan=lifespan)
 app.include_router(backtest_router)
 app.include_router(trading_router)
 app.include_router(strategy_router)
+app.include_router(market_router)
 app.include_router(ws_router)
 
 

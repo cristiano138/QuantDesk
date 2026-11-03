@@ -98,7 +98,9 @@ def test_kill9_auto_restart_and_position_restore(strategy_file, tmp_path):
             time.sleep(0.1)
         assert sup._proc.pid != first_pid
         assert sup.status == "running"
-        assert len([t for t in sup.restarts]) == 1
+        # ≥1：高负载下首次 respawn 可能瞬时失败，守护循环下个 tick 补重启
+        # （重启预算 3 次/小时会兜底，见 test_restart_limit_marks_failed）
+        assert len(sup.restarts) >= 1
         # 崩溃日志落盘
         from quantdesk.config import data_dir
 

@@ -364,3 +364,142 @@ section h2 {
   background: #dc2626;
   color: #fff;
 }
+
+/* ---------- D18 行情面板 ---------- */
+.market-layout {
+  display: grid;
+  grid-template-columns: 180px 1fr 260px;
+  gap: 16px;
+  align-items: start;
+}
+
+.market-watch ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+}
+
+.market-watch li {
+  display: flex;
+  align-items: center;
+}
+
+.market-watch li > button:first-child {
+  flex: 1;
+  text-align: left;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.market-watch li > button.active {
+  background: #e8effd;
+  color: #1d4ed8;
+}
+
+.market-watch .del {
+  border: 0;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.watch-add {
+  display: flex;
+  gap: 6px;
+}
+
+.watch-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid #d3d7de;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.watch-add button {
+  border: 1px solid #d3d7de;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.market-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.freq-tabs button {
+  padding: 4px 10px;
+  margin-left: 4px;
+  border: 1px solid #d3d7de;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.freq-tabs button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.freq-tabs button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ob-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ob-table th,
+.ob-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #f1f3f6;
+  text-align: left;
+}
+
+.ob-table .up {
+  color: #dc2626;
+}
+
+.ob-table .down {
+  color: #16a34a;
+}
+
+.ob-bar {
+  width: 100%;
+  background: #f1f3f6;
+  border-radius: 3px;
+  height: 8px;
+  min-width: 60px;
+}
+
+.ob-fill {
+  height: 8px;
+  border-radius: 3px;
+}
+
+.ob-fill.bid {
+  background: #f87171;
+}
+
+.ob-fill.ask {
+  background: #4ade80;
+}
