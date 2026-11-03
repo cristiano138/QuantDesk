@@ -70,6 +70,9 @@ class AkshareFeed(DataFeedAdapter):
             min_interval if min_interval is not None else s.akshare_min_interval)
         self._connected = False
         self._health_cache: tuple[float, bool] = (0.0, False)
+        # 限流熔断：冷却期内不外呼（K3 已知坑——封禁期内继续调用会延长封禁）
+        self._blocked_until = 0.0    # monotonic 秒
+        self._cooldown = 300.0       # 5min → 15min → 30min（cap），成功后复位
 
     # ---------- 生命周期 ----------
     def connect(self) -> None:
@@ -101,14 +104,43 @@ class AkshareFeed(DataFeedAdapter):
         return ak
 
     def _call(self, fn: Callable[[], T]) -> T:
-        """统一限速 + 单次重试（宪法：单次调用内部最多重试 1 次）。"""
+        """统一限速 + 单次重试（宪法：单次调用内部最多重试 1 次）。
+
+        限流类异常例外：立即熔断（冷却期翻倍递增），不再立即重试——
+        封禁期内重试只会延长封禁（实测教训，D04 批量拉取触发 push2 限流）。
+        """
+        if time.monotonic() < self._blocked_until:
+            remain = self._blocked_until - time.monotonic()
+            raise ConnectionLostError(
+                f"akshare 限流冷却中（剩余 {remain:.0f}s），已熔断避免加重封禁；"
+                "稍后重跑同一命令即可增量续拉（已入库标的走本地命中）")
         self._limiter.acquire()
         try:
-            return fn()
+            out = fn()
         except Exception as e:  # noqa: BLE001
+            if self._is_rate_limit(e):
+                self._trip()
+                raise ConnectionLostError(
+                    f"akshare 限流触发熔断（冷却 {self._cooldown:.0f}s）: {e}") from e
             log.warning("AKShare 调用失败，重试一次: %s", e)
             self._limiter.acquire()
             return fn()
+        self._reset_cooldown()
+        return out
+
+    @staticmethod
+    def _is_rate_limit(e: Exception) -> bool:
+        name = type(e).__name__
+        return "RateLimit" in name or "限流" in str(e)
+
+    def _trip(self) -> None:
+        self._blocked_until = time.monotonic() + self._cooldown
+        log.warning("akshare 熔断 %.0fs（下次冷却翻倍）", self._cooldown)
+        self._cooldown = min(self._cooldown * 3, 1800.0)
+
+    def _reset_cooldown(self) -> None:
+        self._cooldown = 300.0
+        self._blocked_until = 0.0
 
     # ---------- 核心接口 ----------
     def get_history(self, symbol: str, freq: Frequency, start: datetime, end: datetime,
