@@ -130,7 +130,8 @@ def test_market_order_with_and_without_tick(db):
     assert o2.avg_filled_price == round(10.02 * 1.001, 2)
 
 
-def test_insufficient_cash_reduced(tmp_path):
+def test_insufficient_cash_rejected_by_gate(tmp_path):
+    """D16 闸②：资金不足前置拒单（券商真实行为——委托即验资），现金不为负。"""
     from quantdesk.store.db import init_db as _idb
 
     # 场景一：1000 元买不起一手（100×10.05=1005+费 > 1000）→ 拒绝
@@ -141,15 +142,15 @@ def test_insufficient_cash_reduced(tmp_path):
     o = svc.place_order(SYM, "buy", 10_000, price=10.05)
     assert o.status == OrderStatus.REJECTED
 
-    # 场景二：2000 元 → 缩量到一手成交，现金不为负
+    # 场景二：2000 元同样不足以买 10000 股 → 闸②前置拒绝（不再走缩量路径）
     db2 = tmp_path / "b.db"
     _idb(db2)
     svc2 = TradingService(initial_cash=2_000.0, db_path=db2)
     svc2.paper.on_tick(mk_tick(10.0))
     o2 = svc2.place_order(SYM, "buy", 10_000, price=10.05)
-    assert o2.status == OrderStatus.FILLED
-    assert o2.filled_volume == 100                          # 缩量到一手
-    assert svc2.account().cash >= 0
+    assert o2.status == OrderStatus.REJECTED
+    assert "资金不足" in o2.message
+    assert svc2.account().cash == 2_000.0                   # 分文未动
 
 
 class _StubSettings:
