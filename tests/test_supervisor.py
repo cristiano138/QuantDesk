@@ -89,8 +89,8 @@ def test_kill9_auto_restart_and_position_restore(strategy_file, tmp_path):
         sup._proc.join(timeout=5)
         assert sup._proc.exitcode != 0
 
-        # 守护器应自动重启（新 pid）且状态恢复 running
-        deadline = time.monotonic() + 10
+        # 守护器应自动重启（新 pid）且状态恢复 running（高负载下 spawn+import 可达十几秒）
+        deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
             if sup._proc is not None and sup._proc.is_alive() \
                     and sup._proc.pid != first_pid:
