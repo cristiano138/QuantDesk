@@ -249,7 +249,8 @@ def apply_fill(order: Order, result: MatchResult) -> Order:
         filled_volume=total_vol,
         avg_filled_price=round(total_amt / total_vol, 4) if total_vol else 0.0,
         status=status,
-        updated_at=max(order.updated_at, result.trades[-1].traded_at if result.trades else 0),
+        # updated_at 以成交时间为准（回测虚拟时钟 / 实时回报时间，不取墙钟）
+        updated_at=result.trades[-1].traded_at if result.trades else order.updated_at,
     )
 
 
@@ -317,3 +318,14 @@ class PositionBook:
     def available(self, symbol: str) -> int:
         e = self._book.get(symbol)
         return int(e["available"]) if e else 0
+
+    def market_value(self, closes: dict[str, float]) -> float:
+        """按最新价盯市；无最新价的标的按成本价（回测逐 bar 调用）。"""
+        total = 0.0
+        for symbol, e in self._book.items():
+            vol = int(e["volume"])
+            if vol <= 0:
+                continue
+            px = closes.get(symbol, e["avg_cost"])
+            total += px * vol
+        return round(total, 2)
