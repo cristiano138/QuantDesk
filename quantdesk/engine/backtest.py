@@ -19,7 +19,13 @@ import pandas as pd
 from quantdesk.core.enums import AdjustType, Frequency, OrderStatus, OrderType, Side
 from quantdesk.core.models import Bar, Order, Trade
 from quantdesk.core.timeutil import now_ms
-from quantdesk.engine.matching import MatchConfig, PositionBook, apply_fill, match_on_bar
+from quantdesk.engine.matching import (
+    MatchConfig,
+    PositionBook,
+    affordable_volume,
+    apply_fill,
+    match_on_bar,
+)
 from quantdesk.engine.strategy_base import BaseStrategy, StrategyContext
 from quantdesk.store.parquet_store import HISTORY_COLUMNS, ParquetStore
 
@@ -287,8 +293,11 @@ class BacktestEngine:
                     self._log(f"{o.symbol} 委托 {o.order_id} 资金不足拒绝")
                     continue
                 if fill_vol < r.filled_volume:
-                    r = match_on_bar(replace(o, volume=o.filled_volume + fill_vol),
-                                     bar, self.match_cfg)
+                    # 资金不足：订单有效量对齐到可负担量（消息留痕），剩余意图作废
+                    o = replace(o, volume=o.filled_volume + fill_vol,
+                                message=(o.message or "")
+                                + f"资金不足缩量至 {o.filled_volume + fill_vol} 股；")
+                    r = match_on_bar(o, bar, self.match_cfg)
                     if not r.filled:           # 理论不达：缩量后重撞失败则保留原结果防御
                         still.append(po)
                         continue
@@ -316,18 +325,8 @@ class BacktestEngine:
         self._orders = [o if x.order_id == o.order_id else x for x in self._orders]
 
     def _affordable_volume(self, order: Order, price: float, desired: int) -> int:
-        """现金可负担的最大成交量（含费用，向下取整到整手）。"""
-        if desired <= 0 or price <= 0:
-            return 0
-        fee = self.match_cfg.fee
-        est = int(self.cash / (price * (1 + fee.commission_rate + fee.transfer_fee)))
-        vol = min(desired, max(est, 0))
-        while vol > 0 and self.cash < price * vol + fee.buy_fee(price * vol):
-            vol -= 1
-        # 整手取整（主板/创业板口径；科创板整手细化在 D16 RiskGate）
-        if vol >= 100:
-            vol = (vol // 100) * 100
-        return vol
+        """现金可负担的最大成交量（含费用，整手取整）——共用实现见 matching。"""
+        return affordable_volume(self.cash, price, desired, self.match_cfg.fee)
 
     def _equity_row(self, dt: pd.Timestamp) -> dict:
         market_value = self.book.market_value(self._last_close)

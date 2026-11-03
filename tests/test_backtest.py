@@ -225,10 +225,10 @@ def test_insufficient_cash_reduced_to_affordable(tmp_path):
     assert fills[0].volume <= 9_900                    # 整手缩量
     assert eng.cash >= 0                               # 现金不为负
     o = result.orders[0]
-    # 缩量成交后剩余量远未满足 → TTL 撤单收尾（成交部分已入账）
-    assert o.status == OrderStatus.CANCELLED
+    # 资金不足 → 订单有效量对齐到可负担量并 FILLED（消息留痕缩量，不再产生悬挂余量）
+    assert o.status == OrderStatus.FILLED
     assert o.filled_volume == fills[0].volume
-    assert "未成交撤单" in o.message
+    assert "资金不足缩量" in o.message
 
 
 def test_multi_symbol_merge_and_clock(tmp_path):

@@ -27,6 +27,7 @@ __all__ = [
     "match_on_bar",
     "match_on_tick",
     "apply_fill",
+    "affordable_volume",
     "PositionBook",
 ]
 
@@ -252,6 +253,24 @@ def apply_fill(order: Order, result: MatchResult) -> Order:
         # updated_at 以成交时间为准（回测虚拟时钟 / 实时回报时间，不取墙钟）
         updated_at=result.trades[-1].traded_at if result.trades else order.updated_at,
     )
+
+
+# ---------- 资金可负担量 ----------
+
+def affordable_volume(cash: float, price: float, desired: int,
+                      fee: FeeCalculator, lot: int = constants.LOT_SIZE) -> int:
+    """现金可负担的最大成交量（含费用，向下取整到整手；<一手返回 0）。
+
+    回测与模拟盘共用的资金簿记规则；正式 RiskGate 资金闸在 D16。
+    """
+    if desired <= 0 or price <= 0:
+        return 0
+    est = int(cash / (price * (1 + fee.commission_rate + fee.transfer_fee)))
+    vol = min(desired, max(est, 0))
+    while vol > 0 and cash < price * vol + fee.buy_fee(price * vol):
+        vol -= 1
+    vol = (vol // lot) * lot        # 始终整手向下取整（不足一手 = 不可买）
+    return max(vol, 0)
 
 
 # ---------- 持仓簿（T+1） ----------

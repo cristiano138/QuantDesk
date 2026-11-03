@@ -121,3 +121,18 @@ class TradingDayRow(SQLModel, table=True):
 
     date: str = Field(primary_key=True)  # YYYYMMDD
     is_open: int
+
+
+class AccountStateRow(SQLModel, table=True):
+    """账户状态（D09，模拟盘/实盘共用的资金快照；单行 id=1）。
+
+    七表之外的新增本地表：D09 DoD「重启后持仓/资金恢复」需要持久化资金，
+    持仓已有 positions_snapshot，资金在此落地。持仓/成交明细仍在原表。
+    """
+
+    __tablename__ = "account_state"
+
+    id: int | None = Field(default=None, primary_key=True)
+    cash: float = 0.0
+    initial_cash: float = 0.0
+    updated_at: int = Field(default_factory=now_ms)

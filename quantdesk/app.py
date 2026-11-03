@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from quantdesk import __version__
 from quantdesk.api.routes_backtest import router as backtest_router
+from quantdesk.api.routes_trading import router as trading_router
 from quantdesk.config import data_dir, get_settings
 from quantdesk.store.db import init_db
 
@@ -26,6 +27,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="QuantDesk", version=__version__, lifespan=lifespan)
 app.include_router(backtest_router)
+app.include_router(trading_router)
 
 
 @app.get("/api/system/health")

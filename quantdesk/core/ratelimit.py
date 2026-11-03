@@ -28,7 +28,14 @@ class RateLimiter:
             wait = max(0.0, self._next_t - now)
             self._next_t = max(now, self._next_t) + self.min_interval
         if wait > 0:
-            time.sleep(wait)
+            # 睡眠可能被 OS 调度提前唤醒/延迟进入：循环补齐到目标时刻，
+            # 保证实际放行间隔不小于 min_interval（防限速器失效触发反爬）
+            target = time.monotonic() + wait
+            while True:
+                remaining = target - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(remaining)
         if self.min_interval > 0 and self.jitter > 0:
             time.sleep(self.min_interval * self.jitter * random.random())
         return wait

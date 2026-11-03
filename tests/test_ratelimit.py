@@ -9,11 +9,14 @@ from quantdesk.core.ratelimit import RateLimiter
 
 def test_rate_limit_spacing():
     rl = RateLimiter(min_interval=0.03, jitter=0.0)
-    t0 = time.monotonic()
+    times: list[float] = []
     for _ in range(4):
         rl.acquire()
-    elapsed = time.monotonic() - t0
-    assert elapsed >= 0.09  # 3 个完整间隔
+        times.append(time.monotonic())
+    # 间隔契约：相邻放行间隔 >= min_interval（留 5ms 计时/调度容差，Windows 睡眠粒度）
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert all(g >= 0.025 for g in gaps), gaps
+    assert times[-1] - times[0] >= 0.085  # 3 个完整间隔（含容差）
 
 
 def test_zero_interval_no_sleep():

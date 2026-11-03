@@ -288,3 +288,26 @@ def trading_days_open(db_path=None) -> set[str]:
     with get_session(db_path) as s:
         rows = s.exec(_select(TradingDayRow).where(TradingDayRow.is_open == 1)).all()
         return {r.date for r in rows}
+
+
+# ---------- 账户状态（D09） ----------
+def account_get(db_path=None) -> "AccountStateRow | None":
+    from quantdesk.store.models_db import AccountStateRow
+
+    with get_session(db_path) as s:
+        return s.get(AccountStateRow, 1)
+
+
+def account_set(cash: float, initial_cash: float, db_path=None) -> None:
+    from quantdesk.store.models_db import AccountStateRow
+
+    with _write_lock, get_session(db_path) as s:
+        row = s.get(AccountStateRow, 1)
+        if row is None:
+            row = AccountStateRow(id=1, cash=cash, initial_cash=initial_cash)
+            s.add(row)
+        else:
+            row.cash = cash
+            row.initial_cash = initial_cash
+        row.updated_at = now_ms()
+        s.commit()
