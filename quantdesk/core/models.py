@@ -7,7 +7,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from quantdesk.core.enums import OrderStatus, OrderType, Side
+from quantdesk.core.enums import Frequency, OrderStatus, OrderType, Side
 from quantdesk.core.timeutil import now_ms
 
 
