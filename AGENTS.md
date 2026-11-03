@@ -112,17 +112,21 @@ Account{total_asset, cash, market_value, frozen, updated_at}
 
 ## 当前项目状态（每日更新此节）
 
-2026-11-04 · W1（D01–D05）完成：项目骨架 / core 类型 / 代码体系 / EventBus / SQLite(WAL) 七表 /
-Parquet 存储（adjust 三口径并存）/ 插件注册表 / AKShare+Tushare 适配器 / FederatedFeed /
-数据服务（批量下载+缺口报告）/ 前端 7 页壳。pytest 119 用例全绿（network 标记默认跳过）。
-仓库根 = F:\量化交易（原设计文档中 F:\QuantDesk 占位以本仓库为准）。
+2026-11-04 · W2–W6（D06–D30）连续执行完成：撮合引擎 / 回测引擎（无未来函数）/
+指标与回测 API / 模拟盘（tick 撮合+SQLite 回放重启恢复）/ 回测·行情·监控·设置·合规·数据前端 /
+ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate 三道闸全量 /
+二次确认流 / 端到端验收 / 数据源口径审计 / 桌面壳+启动.bat。pytest 236 用例全绿
+（network 默认跳过）。tag：v1.0.0（D20）→ v1.1.0（D30）。
 
-- M1 状态：**部分达成**。AKShare 单源链路已验证（000001.SZ 2019→今 qfq 1899 行入库，
-  schema ✓，断点重跑无重复 ✓）；50 只样本批量受东财 push2 限流中断（已加熔断修复，
-  续拉命令：`uv run python scripts/download_history.py`，已入库标的走本地命中不耗配额）；
-  **AKShare vs Tushare 交叉对数待 token**（`scripts/verify_sources.py` 已就绪，配置
-  QUANTDESK_TUSHARE_TOKEN 后重跑即可，当前结构化退出码 2）。
-- 实测教训：封禁期内重试会延长东财封禁 → AkshareFeed 已加限流熔断
-  （RateLimit 异常立即 ConnectionLostError + 冷却 5/15/30min）。
-- 行政前置：QMT 权限 / iFinD 试用申请 / Tushare 注册均待用户提交（D1 已提醒）。
-- 下一日：D06 撮合引擎（matching.py，回测与模拟盘共用实现）。
+- M1 部分（AKShare vs Tushare 交叉对数待 token：`scripts/verify_sources.py` 就绪，
+  配置 QUANTDESK_TUSHARE_TOKEN 后重跑）；M2 达成；M3 部分（IPC/守护达成，实时驱动待 QMT）；
+  M4 达成（v1.0.0）；M5 未启动（需用户在场）；M6 可交付项达成（v1.1.0）。
+- **关键发现（P1）**：东财(AKShare) qfq 口径日收益分离（10/10 标的中位 0.08%~0.25%，
+  601899 局部 4.6× 放大）——不能作精确回测基准；Tushare 本地精确 qfq 待 token 切主口径。
+  详见 `docs/audit_order_path.md` 与 `data/logs/source_align_audit_*.csv`。
+- 顺延（外部前置未具备）：D13-D15（QMT 权限/通达信 SDK）、D21-D26（实盘通道，
+  需用户在场/掘金/iFinD/easytrader）。恢复路径见 README 权限指引表。
+- 实测教训：高负载下子进程 spawn+import 可达十几秒（守护测试等待窗口已放宽；
+  supervisor 首次心跳前不做心跳判死）；RateLimiter 已修睡眠唤醒 undersleep 缺陷。
+- 下一日（权限就位后）：QMT 行情接入（D13 卡片）→ 实盘通道（D21-23 卡片，只读起步）；
+  token 就位后先跑 verify_sources.py 交叉对数。
