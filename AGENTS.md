@@ -112,4 +112,17 @@ Account{total_asset, cash, market_value, frozen, updated_at}
 
 ## 当前项目状态（每日更新此节）
 
-（第 1 天：尚无代码，从零开始。行政前置：QMT 权限 / iFinD 试用申请待提交。）
+2026-11-04 · W1（D01–D05）完成：项目骨架 / core 类型 / 代码体系 / EventBus / SQLite(WAL) 七表 /
+Parquet 存储（adjust 三口径并存）/ 插件注册表 / AKShare+Tushare 适配器 / FederatedFeed /
+数据服务（批量下载+缺口报告）/ 前端 7 页壳。pytest 119 用例全绿（network 标记默认跳过）。
+仓库根 = F:\量化交易（原设计文档中 F:\QuantDesk 占位以本仓库为准）。
+
+- M1 状态：**部分达成**。AKShare 单源链路已验证（000001.SZ 2019→今 qfq 1899 行入库，
+  schema ✓，断点重跑无重复 ✓）；50 只样本批量受东财 push2 限流中断（已加熔断修复，
+  续拉命令：`uv run python scripts/download_history.py`，已入库标的走本地命中不耗配额）；
+  **AKShare vs Tushare 交叉对数待 token**（`scripts/verify_sources.py` 已就绪，配置
+  QUANTDESK_TUSHARE_TOKEN 后重跑即可，当前结构化退出码 2）。
+- 实测教训：封禁期内重试会延长东财封禁 → AkshareFeed 已加限流熔断
+  （RateLimit 异常立即 ConnectionLostError + 冷却 5/15/30min）。
+- 行政前置：QMT 权限 / iFinD 试用申请 / Tushare 注册均待用户提交（D1 已提醒）。
+- 下一日：D06 撮合引擎（matching.py，回测与模拟盘共用实现）。
