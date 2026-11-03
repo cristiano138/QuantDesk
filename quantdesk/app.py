@@ -26,7 +26,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     (d / "parquet").mkdir(parents=True, exist_ok=True)
     (d / "logs").mkdir(parents=True, exist_ok=True)
     init_db()                              # D03：启动自动建表（幂等）
+    from quantdesk.services.scheduler import PostCloseScheduler
+
+    sched = PostCloseScheduler()           # D27：盘后复权刷新（交易日 18:00）
+    sched.start()
     yield
+    sched.stop()
 
 
 app = FastAPI(title="QuantDesk", version=__version__, lifespan=lifespan)
