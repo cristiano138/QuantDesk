@@ -239,3 +239,26 @@ export async function removeWatch(symbol: string): Promise<WatchItem[]> {
   const r = await api.delete<WatchItem[]>(`/market/watchlist/${encodeURIComponent(symbol)}`)
   return r.data
 }
+
+// ---------- 设置（D19） ----------
+
+export interface AppSettings {
+  simulation_only: boolean
+  broker_channel: string
+  commission_rate: number
+  min_commission: number
+  stamp_tax_sell: number
+  transfer_fee: number
+  akshare_min_interval: number
+  tushare_min_interval: number
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const r = await api.get<AppSettings>('/settings')
+  return r.data
+}
+
+export async function putSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const r = await api.put<AppSettings>('/settings', patch)
+  return r.data
+}

@@ -28,6 +28,7 @@ class EventType(str, Enum):
     LOG = "log"
     TIMER = "timer"
     RISK = "risk"
+    SETTINGS = "settings"   # D19 扩展（宪法枚举未删减，新增事件类型）
 
 
 @dataclass
