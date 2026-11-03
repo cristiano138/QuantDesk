@@ -17,7 +17,12 @@ import pandas as pd
 
 from quantdesk.adapters.base.datafeed import HISTORY_COLUMNS, DataFeedAdapter
 from quantdesk.core.enums import AdjustType, FeedCapability, Frequency
-from quantdesk.core.errors import AdapterError, ConfigError, FeedCapabilityError
+from quantdesk.core.errors import (
+    AdapterError,
+    ConfigError,
+    ConnectionLostError,
+    FeedCapabilityError,
+)
 from quantdesk.core.models import Bar, Tick
 from quantdesk.store.parquet_store import ParquetStore
 
@@ -76,12 +81,16 @@ class FederatedFeed(DataFeedAdapter):
             local = self.store.read(symbol, freq, start, end, adjust)
             if not local.empty:
                 return local
+        last_error: Exception | None = None
+        attempted = False
         for feed in self.history_feeds:
             if FeedCapability.HISTORY_BAR not in feed.capabilities:
                 continue
+            attempted = True
             try:
                 df = feed.get_history(symbol, freq, start, end, adjust)
             except (AdapterError, ConfigError) as e:
+                last_error = e
                 log.warning("历史外呼失败: %s %s: %s", getattr(feed, "name", feed), symbol, e)
                 continue
             if df is not None and not df.empty:
@@ -91,6 +100,11 @@ class FederatedFeed(DataFeedAdapter):
                     except Exception as e:  # noqa: BLE001 回写失败不影响返回
                         log.error("Parquet 回写失败 %s: %s", symbol, e)
                 return df
+        # 语义区分：空 DataFrame = 问到了但无数据；全部子源报错 = 没问到 → 抛错
+        # （避免批量下载把"源不可用"误标为"成功 0 行"）
+        if attempted and last_error is not None:
+            raise ConnectionLostError(
+                f"全部历史源不可用（symbol={symbol}）: {last_error}") from last_error
         return pd.DataFrame(columns=HISTORY_COLUMNS)
 
     # ---------- 财务（降级链） ----------

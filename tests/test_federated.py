@@ -78,11 +78,20 @@ def test_miss_calls_feed_and_writes_back(tmp_path):
     assert not out2.empty
 
 
-def test_all_feeds_fail_returns_empty(tmp_path):
+def test_all_feeds_fail_raises_not_empty(tmp_path):
+    """全部子源报错 ≠ 无数据：必须抛错，防止批量下载误标"成功 0 行"。"""
     fed = FederatedFeed([DummyFeed(raise_if=AdapterError("x")),
                          DummyFeed(raise_if=AdapterError("y"))],
                         store=ParquetStore(root=tmp_path / "p"))
-    out = fed.get_history("600000.SH", Frequency.D1, "2024-01-01", "2024-01-31")
+    with pytest.raises(AdapterError) as exc:
+        fed.get_history("600000.SH", Frequency.D1, "2024-01-01", "2024-01-31")
+    assert "全部历史源不可用" in str(exc.value)
+
+
+def test_feed_returning_empty_is_not_error(tmp_path):
+    """子源正常应答但无数据 → 返回空表（DataFeed 契约语义）。"""
+    fed = FederatedFeed([DummyFeed(df=None)], store=ParquetStore(root=tmp_path / "p"))
+    out = fed.get_history("999999.SH", Frequency.D1, "2024-01-01", "2024-01-31")
     assert out.empty and list(out.columns) == HISTORY_COLUMNS
 
 
