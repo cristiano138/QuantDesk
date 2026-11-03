@@ -136,3 +136,45 @@ export async function getBacktest(runId: number): Promise<BacktestResult> {
   const r = await api.get<BacktestResult>(`/backtest/${runId}`)
   return r.data
 }
+
+// ---------- 策略管理（D12） ----------
+
+export async function listStrategyFiles(): Promise<string[]> {
+  const r = await api.get<string[]>('/strategies/files')
+  return r.data
+}
+
+export async function readStrategyFile(path: string): Promise<{ path: string; code: string }> {
+  const r = await api.get('/strategies/file', { params: { path } })
+  return r.data
+}
+
+export async function saveStrategyFile(path: string, code: string): Promise<{ saved: string }> {
+  const r = await api.post('/strategies/file', { path, code })
+  return r.data
+}
+
+export interface StrategyStatus {
+  strategy_id: string
+  status: string
+  last_heartbeat_age_s: number | null
+  restarts_last_hour: number
+  recent_logs: string[]
+}
+
+export async function startStrategy(
+  id: string, mode: 'paper' | 'live', params: Record<string, string | number> = {},
+): Promise<{ strategy_id: string; status: string; mode?: string; already?: boolean }> {
+  const r = await api.post(`/strategies/${encodeURIComponent(id)}/start`, { mode, params })
+  return r.data
+}
+
+export async function stopStrategy(id: string): Promise<{ stopped: boolean }> {
+  const r = await api.post(`/strategies/${encodeURIComponent(id)}/stop`)
+  return r.data
+}
+
+export async function strategyStatus(id: string): Promise<StrategyStatus> {
+  const r = await api.get(`/strategies/${encodeURIComponent(id)}/status`)
+  return r.data
+}

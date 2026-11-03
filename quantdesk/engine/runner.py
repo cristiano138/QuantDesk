@@ -19,8 +19,6 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-
 from quantdesk.core.enums import Frequency
 from quantdesk.core.models import Bar, Position, Tick
 from quantdesk.engine.strategy_base import BaseStrategy, StrategyContext
@@ -114,8 +112,13 @@ class IPCStrategyContext(StrategyContext):
         self._client.send("subscribe", {"symbols": list(symbols)})
 
     def history(self, symbol: str, freq: Frequency | str = Frequency.D1,
-                bars: int = 120) -> pd.DataFrame:
-        """子进程内缓存的历史（订阅流累积），结构与回测版一致（HISTORY_COLUMNS）。"""
+                bars: int = 120):
+        """子进程内缓存的历史（订阅流累积），结构与回测版一致（HISTORY_COLUMNS）。
+
+        pandas 懒加载：不调用 history 的策略子进程启动更快（导入期缩短）。
+        """
+        import pandas as pd
+
         buf = self._bars.get(symbol)
         if not buf:
             return pd.DataFrame(columns=HISTORY_COLUMNS)

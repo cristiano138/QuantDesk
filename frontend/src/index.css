@@ -220,3 +220,72 @@ section h2 {
   padding: 8px;
   border-radius: 6px;
 }
+
+/* ---------- D12 策略工作台 ---------- */
+.strategy-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+.strategy-tree ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 10px;
+}
+
+.strategy-tree button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.strategy-tree button.active {
+  background: #e8effd;
+  color: #1d4ed8;
+}
+
+.strategy-tree > button {
+  border: 1px solid #d3d7de;
+  background: #fff;
+}
+
+.editor-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.editor-bar button {
+  padding: 5px 12px;
+  margin-left: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.editor-bar button.stop {
+  background: #dc2626;
+}
+
+.strategy-panel h4 {
+  margin: 10px 0 6px;
+  font-size: 13px;
+}
+
+.strategy-panel p {
+  font-size: 13px;
+}
