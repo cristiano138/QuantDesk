@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# 运行时数据（宪法：全部数据本地存储，不入 git）
+data/
+
+# 环境与敏感信息（token/账号只进本地配置）
+.env
+*.local.env
+
+# 日志
+*.log
+
+# 前端
+node_modules/
+frontend/dist/
+
+# 编辑器
+.idea/
+.vscode/

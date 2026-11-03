@@ -1,0 +1,36 @@
+[project]
+name = "quantdesk"
+version = "0.1.0"
+description = "QuantDesk — Windows 本地 A 股量化交易工作台"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyzmq>=26",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "sqlmodel>=0.0.19",
+    "akshare>=1.14",
+    "tushare>=1.4.6",
+    "msgpack>=1.0",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quantdesk"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["network: 需要外网与真实数据源的用例（默认跳过，-m network 显式运行）"]
+addopts = "-q -m 'not network'"
