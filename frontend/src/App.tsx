@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
-import { getHealth, type Health } from './api/client'
+import { api, getHealth, openEvents, type Health } from './api/client'
+import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
 import BacktestPage from './pages/BacktestPage'
 import CompliancePage from './pages/CompliancePage'
 import DataPage from './pages/DataPage'
@@ -52,6 +53,41 @@ function HealthBadge() {
 }
 
 export default function App() {
+  // 实盘二次确认（D17）：全局监听 confirm_request，服务端强制、前端仅表现层
+  const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null)
+  useEffect(
+    () =>
+      openEvents((data) => {
+        const d = data as {
+          type: string
+          data?: { action?: string; order?: Record<string, unknown> }
+        }
+        if (d?.type === 'risk' && d.data?.action === 'confirm_request' && d.data.order) {
+          const o = d.data.order
+          setConfirmReq({
+            order_id: String(o.order_id ?? ''),
+            symbol: String(o.symbol ?? ''),
+            side: String(o.side ?? 'buy'),
+            price: Number(o.price ?? 0),
+            volume: Number(o.volume ?? 0),
+            strategy_id: String(o.strategy_id ?? 'manual'),
+          })
+        }
+      }),
+    [],
+  )
+  const onConfirmDone = useCallback(
+    async (orderId: string, decision: 'confirm' | 'reject' | 'expired') => {
+      setConfirmReq(null)
+      if (decision === 'expired') return // 服务端超时自会作废
+      try {
+        await api.post(`/trading/orders/${encodeURIComponent(orderId)}/${decision}`)
+      } catch {
+        /* 结果以订单状态为准 */
+      }
+    },
+    [],
+  )
   return (
     <div className="app">
       <aside>
@@ -79,6 +115,7 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
+      <ConfirmDialog request={confirmReq} onDone={onConfirmDone} />
     </div>
   )
 }

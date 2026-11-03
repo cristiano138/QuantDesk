@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 import threading
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -23,9 +24,11 @@ import pandas as pd
 
 from quantdesk.core import constants
 from quantdesk.core.enums import AdjustType, Frequency, OrderStatus, OrderType, Side
+from quantdesk.core.errors import ConnectionLostError
 from quantdesk.core.events import Event, EventType, EventBus
 from quantdesk.core.models import Order
 from quantdesk.core.symbols import board_of, is_st
+from quantdesk.core.timeutil import now_ms
 from quantdesk.engine.matching import FeeCalculator
 from quantdesk.store import repo
 from quantdesk.store.parquet_store import ParquetStore
@@ -53,7 +56,8 @@ class RiskGate:
                  store: ParquetStore | None = None,
                  max_position_value: float = 1_000_000.0,
                  max_daily_orders: int = 200,
-                 fee: FeeCalculator | None = None) -> None:
+                 fee: FeeCalculator | None = None,
+                 confirm_timeout_s: float = 10.0) -> None:
         self.paper = paper_broker
         self.live = live_broker
         self.settings = settings          # None → 运行时读 config（支持 D19 热切）
@@ -63,9 +67,48 @@ class RiskGate:
         self.max_position_value = float(max_position_value)
         self.max_daily_orders = int(max_daily_orders)
         self.fee = fee or FeeCalculator()
+        self.confirm_timeout_s = float(confirm_timeout_s)
         self._pending_confirm: dict[str, Order] = {}
+        self._armed_at: dict[str, float] = {}   # 确认窗口计时（重启后重新起算）
         self._lock = threading.RLock()
         self._prev_close_cache: dict[str, tuple[str, float]] = {}
+        self._expiry_stop = threading.Event()
+        if confirm_timeout_s > 0:
+            self._expiry_thread = threading.Thread(target=self._expiry_loop,
+                                                   name="riskgate-expiry", daemon=True)
+            self._expiry_thread.start()
+
+    # ---------- 超时作废（闸③ 10s 自动作废） ----------
+    def _expiry_loop(self) -> None:
+        while not self._expiry_stop.wait(0.2):
+            try:
+                self._expire_overdue()
+            except Exception:                      # noqa: BLE001 — 守护循环不中断
+                continue
+
+    def _expire_overdue(self) -> None:
+        deadline = time.monotonic() - self.confirm_timeout_s
+        with self._lock:
+            overdue = [oid for oid, armed in self._armed_at.items() if armed < deadline]
+        for oid in overdue:
+            with self._lock:
+                o = self._pending_confirm.pop(oid, None)
+                self._armed_at.pop(oid, None)
+            if o is None:
+                continue
+            o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM,
+                         message=f"二次确认超时（{self.confirm_timeout_s:.0f}s）自动作废")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
+
+    def restore_pending(self) -> int:
+        """重启恢复：从库重载待确认单，确认窗口重新起算（DoD：重启后仍在且可处理）。"""
+        rows = repo.list_orders(status=OrderStatus.PENDING_CONFIRM, db_path=self.db_path)
+        with self._lock:
+            for o in rows:
+                self._pending_confirm[o.order_id] = o
+                self._armed_at[o.order_id] = time.monotonic()
+        return len(rows)
 
     # ---------- 咽喉 ----------
     def submit(self, intent: Order) -> Order:
@@ -94,6 +137,7 @@ class RiskGate:
         o = _replace(o, status=OrderStatus.PENDING_CONFIRM)
         with self._lock:
             self._pending_confirm[o.order_id] = o
+            self._armed_at[o.order_id] = time.monotonic()
         repo.upsert_order(o, db_path=self.db_path)     # 先落库
         self._publish(EventType.RISK, {"action": "confirm_request", "order": _to_dict(o)})
         return o
@@ -211,16 +255,32 @@ class RiskGate:
 
     # ---------- 闸③：确认回调 ----------
     def confirm(self, order_id: str) -> Order:
+        """用户确认 → 投递实盘。通道断线 → FAILED（fail-closed，不静默）。"""
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
+            self._armed_at.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
-        placed = self.live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
+        if not self.live.health_check():
+            o = _replace(o, status=OrderStatus.FAILED, message="确认时通道断线——fail-closed")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+            return o
+        try:
+            placed = self.live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
+        except ConnectionLostError as e:
+            o = _replace(o, status=OrderStatus.FAILED, message=f"通道断线：{e}")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+            return o
+        repo.upsert_order(placed, db_path=self.db_path)
+        self._publish(EventType.ORDER, placed)
         return placed
 
     def reject(self, order_id: str) -> Order:
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
+            self._armed_at.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
         o = _replace(o, status=OrderStatus.REJECTED, message="用户拒绝（二次确认）")

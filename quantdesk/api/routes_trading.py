@@ -53,6 +53,27 @@ def cancel_order(order_id: str) -> dict:
     return {"accepted": True, "order_id": order_id}
 
 
+@router.post("/orders/{order_id}/confirm")
+def confirm_order(order_id: str) -> dict:
+    """实盘二次确认（闸③回调；服务端强制，前端只是表现层）。"""
+    svc = get_trading_service()
+    try:
+        o = svc.confirm_order(order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return _order_json(o)
+
+
+@router.post("/orders/{order_id}/reject")
+def reject_order(order_id: str) -> dict:
+    svc = get_trading_service()
+    try:
+        o = svc.reject_order(order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return _order_json(o)
+
+
 @router.get("/orders")
 def list_orders(status: str | None = None) -> list[dict]:
     svc = get_trading_service()

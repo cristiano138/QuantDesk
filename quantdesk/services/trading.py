@@ -34,6 +34,7 @@ class TradingService:
         with self._lock:
             if not self._started:
                 self.paper.connect()
+                self.gate.restore_pending()       # D17：重启后待确认单重载
                 self._started = True
 
     def stop(self) -> None:
@@ -41,6 +42,15 @@ class TradingService:
             if self._started:
                 self.paper.disconnect()
                 self._started = False
+
+    # ---------- 二次确认（D17，实盘路径） ----------
+    def confirm_order(self, order_id: str) -> Order:
+        self.start()
+        return self.gate.confirm(order_id)
+
+    def reject_order(self, order_id: str) -> Order:
+        self.start()
+        return self.gate.reject(order_id)
 
     # ---------- 下单/撤单 ----------
     def place_order(self, symbol: str, side: str, volume: int,

@@ -289,3 +289,78 @@ section h2 {
 .strategy-panel p {
   font-size: 13px;
 }
+
+/* ---------- D17 二次确认弹窗 ---------- */
+.dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.dialog {
+  width: 360px;
+  margin-bottom: 0;
+}
+
+.dialog-red {
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.dialog table {
+  width: 100%;
+  font-size: 13px;
+  border-collapse: collapse;
+}
+
+.dialog th {
+  text-align: left;
+  color: #6b7280;
+  font-weight: 500;
+  padding: 5px 8px 5px 0;
+  width: 64px;
+}
+
+.dialog td {
+  padding: 5px 0;
+}
+
+.dialog-count {
+  font-size: 13px;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.dialog-actions button {
+  flex: 1;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dialog-actions .danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.dialog-actions .primary {
+  background: #dc2626;
+  color: #fff;
+}
