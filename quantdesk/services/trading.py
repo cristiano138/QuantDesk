@@ -11,7 +11,7 @@ import threading
 
 from quantdesk.adapters.brokers.paper_broker import PaperBroker
 from quantdesk.core.enums import OrderStatus, OrderType, Side
-from quantdesk.core.events import EventBus
+from quantdesk.core.events import SYSTEM_BUS, EventBus
 from quantdesk.core.models import Account, Order, Position, Trade
 from quantdesk.engine.riskgate import RiskGate
 
@@ -20,8 +20,8 @@ __all__ = ["TradingService", "get_trading_service"]
 
 class TradingService:
     def __init__(self, initial_cash: float = 1_000_000.0, db_path=None,
-                 settings=None) -> None:
-        self.bus = EventBus()
+                 settings=None, bus: EventBus | None = None) -> None:
+        self.bus = bus or SYSTEM_BUS          # 默认接进程级枢纽 → /ws/events 下行
         self.paper = PaperBroker(initial_cash=initial_cash, db_path=db_path,
                                  event_bus=self.bus)
         self.gate = RiskGate(paper_broker=self.paper, live_broker=None,

@@ -61,3 +61,78 @@ export function openEvents(
     ws?.close()
   }
 }
+
+// ---------- 回测（D10） ----------
+
+export interface StrategyInfo {
+  name: string
+  module: string
+  params: Record<string, string | number>
+}
+
+export async function getStrategies(): Promise<StrategyInfo[]> {
+  const r = await api.get<StrategyInfo[]>('/backtest/strategies')
+  return r.data
+}
+
+export interface EquityPoint {
+  dt: string
+  equity: number
+  cash: number
+  market_value: number
+}
+
+export interface TradeRow {
+  trade_id: string
+  order_id: string
+  symbol: string
+  side: string
+  price: number
+  volume: number
+  amount: number
+  traded_at: number
+}
+
+export interface Metrics {
+  total_return: number
+  annual_return: number
+  max_drawdown: number
+  sharpe: number
+  win_rate: number
+  profit_loss_ratio: number | null
+  turnover: number
+  trade_count: number
+}
+
+export interface BacktestResult {
+  run_id: number
+  metrics: Metrics
+  equity: EquityPoint[]
+  trades: TradeRow[]
+  orders: unknown[]
+  logs: string[]
+  bars: number
+  config: Record<string, unknown>
+}
+
+export interface BacktestRequest {
+  strategy: string
+  symbols: string[]
+  params?: Record<string, string | number>
+  freq?: string
+  start?: string
+  end?: string
+  initial_cash?: number
+  slippage?: number
+  rf?: number
+}
+
+export async function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
+  const r = await api.post<BacktestResult>('/backtest', req, { timeout: 120000 })
+  return r.data
+}
+
+export async function getBacktest(runId: number): Promise<BacktestResult> {
+  const r = await api.get<BacktestResult>(`/backtest/${runId}`)
+  return r.data
+}

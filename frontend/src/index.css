@@ -105,3 +105,118 @@ section h2 {
   background: #fee2e2;
   color: #b91c1c;
 }
+
+/* ---------- D10 回测页 ---------- */
+.backtest-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.backtest-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #4b5563;
+  margin-bottom: 10px;
+}
+
+.backtest-form input,
+.backtest-form select {
+  padding: 6px 8px;
+  border: 1px solid #d3d7de;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.backtest-form .row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.backtest-form button {
+  width: 100%;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.backtest-form button:disabled {
+  background: #93c5fd;
+  cursor: not-allowed;
+}
+
+.backtest-form h4 {
+  margin: 8px 0 6px;
+  font-size: 13px;
+}
+
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 0;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.card th,
+.card td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f1f3f6;
+}
+
+.card .up {
+  color: #dc2626;
+}
+
+.card .down {
+  color: #16a34a;
+}
+
+.logs {
+  font-size: 12px;
+  max-height: 220px;
+  overflow: auto;
+  background: #f8fafc;
+  padding: 8px;
+  border-radius: 6px;
+}

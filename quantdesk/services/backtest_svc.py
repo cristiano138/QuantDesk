@@ -35,6 +35,13 @@ _STRATEGY_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TRADING_DAYS = 252
 
 
+def _publish_log(message: str) -> None:
+    """向进程级事件枢纽发布 LOG（/ws/events 下行）。"""
+    from quantdesk.core.events import SYSTEM_BUS, Event, EventType
+
+    SYSTEM_BUS.publish(Event(EventType.LOG, data={"message": message}, source="backtest"))
+
+
 # ---------- 指标 ----------
 
 def equity_to_json(equity: pd.DataFrame) -> list[dict]:
@@ -195,6 +202,9 @@ class BacktestService:
         repo.backtest_finish(run_id, metrics_json=json.dumps(metrics, ensure_ascii=False),
                              equity_json=json.dumps(equity_json), status="completed",
                              db_path=self.db_path)
+        # 回测过程输出接事件流（D10：同步任务为完成后整体推送，异步流式在 M4 前补齐）
+        _publish_log(f"回测 {run_id} 完成：{cls.name} {symbols} "
+                     f"{len(result.trades)} 笔成交，总收益 {metrics['total_return']:.2%}")
         return {
             "run_id": run_id,
             "metrics": metrics,

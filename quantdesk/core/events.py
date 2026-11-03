@@ -86,3 +86,8 @@ class EventBus:
             except Exception:  # noqa: BLE001 单 handler 异常隔离，只记日志
                 log.exception("EventBus handler 异常（已隔离）: type=%s", etype)
         return called
+
+
+# 进程内统一事件枢纽（D10）：服务层发布 → /ws/events 下行到前端。
+# 各服务默认发布到这里；测试可用独立 EventBus 注入隔离。
+SYSTEM_BUS = EventBus()
