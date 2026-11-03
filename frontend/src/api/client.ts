@@ -262,3 +262,62 @@ export async function putSettings(patch: Partial<AppSettings>): Promise<AppSetti
   const r = await api.put<AppSettings>('/settings', patch)
   return r.data
 }
+
+// ---------- 合规 + 运维（D28） ----------
+
+export interface ComplianceItem {
+  id: number | null
+  item: string
+  category: string
+  checked: boolean
+  note: string
+  updated_at: number
+}
+
+export async function getCompliance(): Promise<ComplianceItem[]> {
+  const r = await api.get<ComplianceItem[]>('/compliance')
+  return r.data
+}
+
+export async function putCompliance(
+  item: string, category: string, checked: boolean, note = '',
+): Promise<ComplianceItem[]> {
+  const r = await api.put<ComplianceItem[]>('/compliance', { item, category, checked, note })
+  return r.data
+}
+
+export function complianceExportUrl(): string {
+  return '/api/compliance/export'
+}
+
+export interface AdapterInfo {
+  name: string
+  registered: boolean
+  status: string
+}
+
+export interface AdaptersHealth {
+  version: string
+  simulation_only: boolean
+  broker_channel: string
+  feeds: AdapterInfo[]
+  brokers: AdapterInfo[]
+  limits: Record<string, number>
+}
+
+export async function getAdaptersHealth(): Promise<AdaptersHealth> {
+  const r = await api.get<AdaptersHealth>('/system/adapters')
+  return r.data
+}
+
+export interface LogFileInfo {
+  file: string
+  kind: string
+  size: number
+  mtime: string
+}
+
+export async function getLogFiles(): Promise<LogFileInfo[]> {
+  const r = await api.get<LogFileInfo[]>('/system/logs')
+  return r.data
+}
