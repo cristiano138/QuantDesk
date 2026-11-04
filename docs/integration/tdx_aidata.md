@@ -21,13 +21,12 @@
 / `transport_official` / `resolved_methods`）。两层都没有 → `import_optional` 抛带安装引导的
 `AdapterError`（不静默、不返回 None）。
 
-**`requires` 语义与注册表的差异（重要，已知设计债）**
-类上声明 `requires = ("TdxAiData", "pytdx")` 表示**可选 SDK 全集（二者择一即可工作）**，
-而注册表 `AdapterMeta.deps_ready()` 的语义是「全部存在才就绪」。因此只装了 pytdx 时，
-接入向导里本通道状态会显示 `unready`、`missing` 里列 `TdxAiData`——面板口径偏严，不影响使用。
-按宪法第 1 条不为单个通道改注册表；实例侧提供 `TdxAiDataFeed.deps_ready()`（「任一可用」口径）
-与 `describe()` 作为真实判据。若后续要面板准确，正确做法是给注册表加「requires 支持 any 语义」
-的元数据位（统一改，不是单点绕过）。
+**`requires` 语义（择一即可）**
+类上声明 `requires = ("TdxAiData", "pytdx")` 是**可选 SDK 全集**，并配 `requires_any = True`
+告知注册表「任一存在即就绪」。因此只装了 pytdx 时，通道页显示 `ready`、`missing` 为空；
+两层都没装才显示 `unready` 并列出两个候选。实例侧另有 `describe()` 上报本次实际选中的传输层
+（`transport` / `transport_reason` / `transport_official`），面板口径以它为准——
+`official=True` 表示存在官方路径，不代表当前跑的是官方层。
 
 ## 2. 安装与前置
 

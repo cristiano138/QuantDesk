@@ -34,6 +34,15 @@
 9. **合规**：程序化交易报备清单为常驻页面（导航入口，非弹窗刷屏）；easytrader 类  
    非官方通道默认禁用 + UI 红字「非官方接口，稳定性低」；新数据源接入必须交叉对数  
    （与已接入任一源误差 ≤ 0.1%，除权日单列报告）。
+10. **港股只读红线**：本工作台港股（`.HK`）定位是**看盘**，不提供交易能力。  
+    `RiskGate` 在咽喉处对 `is_hk(symbol)` 的下单意图一律拒单（`submit` 与 `validate` 两处都拦，  
+    四种代码写法 `00700.HK / 700.HK / hk00700 / 116.00700` 都要命中），`/api/watch/*` 与盯盘前端  
+    **不得出现**任何下单/撤单/持仓写入口。这是设计意图，不是待办功能——加港股交易需用户在场另开轮次。
+11. **公开接口纪律**：`tx_quote` / `em_quote` 是无 SLA 的网页接口。  
+    ① 限速器不许失效（放行间隔锚在实际放行时刻）；② 连接被掐按**主机**冷却，冷却期内零外呼；  
+    ③ 休市时自动路径不外呼，只有一线用户手动刷新（`force`）才打；④ 同一份数据多端点共享 TTL 缓存；  
+    ⑤ 口径缺失或单源（如港股内外盘只能取东财 `f49`，无第二源互证）只能如实标注，
+    不许用别的数凑一个看起来像的结果；运行期要取的字段必须在调用点取（缓存为空时降级＝静默错口径）。
 
 ## 技术栈（已锁定，不讨论替换）
 
@@ -47,31 +56,42 @@ federated 降级路由（以上 SDK 全为**可选依赖**，不进 pyproject，
 
 ## 架构分层与职责
 
-- UI 层 frontend/src：行情面板 / 策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 /  
-  报备清单 / 设置（全局模拟盘开关）
+- UI 层 frontend/src：实时盯盘(/watch，A股+港股只读) / 新手指引(/guide，术语库) / 行情面板 /  
+  策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 / 报备清单 / 设置（全局模拟盘开关）
 - API 网关层 quantdesk/api：routes\_* + ws.py（/ws/events 统一事件流）；只依赖 services  
   （routes_channels 通道全景/探活/凭据/对账 · routes_interop 板块与公式互操作 ·  
-  routes_system 日志检索与 adapters · routes_backtest 同步+异步队列与进度）
+  routes_system 日志检索与 adapters · routes_backtest 同步+异步队列与进度 ·  
+  routes_watch 盯盘池/刷新/详情/逐笔/K线/历史定格（**无任何下单入口**）· routes_guide 术语检索）
 - 服务层 quantdesk/services：market_data / trading / strategy_mgr / backtest_svc / data_store  
+  （含 **backfill()：只补缺不覆盖 + 写入后自检**）· **watch（只读盯盘：时段表 A股/港股分开、  
+  买卖量主口径=官方内外盘、逐笔只做分层与明细、方向码每日校准且只在置信时缓存、  
+  休市不外呼 + TTL 缓存 + 收盘定格落 daily_flow）** · **guide（101 条术语 × 10 类，  
+  import 期自检重复 slug / 未知分类 / 关联断链）**  
   · **channels（ChannelHub 按配置动态装配：实时主源单一/历史降级链/凭据缺失 fail-closed/  
   实盘通道惰性解析+15s 冷却）** · **realtime（RealtimePump：订阅上行→行情下行→意图过闸→回报回投）** ·  
   **reconcile（周期对账：通道快照 vs SQLite，差异落 reconcile_diff + RISK 广播）** ·  
   **logsink（LOG/RISK 批量落 run_log，可检索）** · **interop（通达信 .blk / 同花顺·东财 TXT 板块双向 +  
   通达信/同花顺条件选股公式方言编译，规则求值与公式同源）**
 - 引擎层 quantdesk/engine：EventBus(core) · RiskGate（订单唯一咽喉，含 live_provider 动态实盘解析 +  
-  风控热参）· runner（策略子进程装载）· supervisor（心跳 5s / 判死 15s / 重启上限 3 次每小时，  
-  subscribe 意图上收）· backtest + matching（回测与模拟共用撮合，BacktestEngine.run(on_progress=…)）
+  风控热参 + **港股只读红线：is_hk 一律拒单，submit 与 validate 两处都拦**）· runner（策略子进程装载）·  
+  supervisor（心跳 5s / 判死 15s / 重启上限 3 次每小时，subscribe 意图上收）· backtest + matching（回测与  
+  模拟共用撮合，BacktestEngine.run(on_progress=…)）
 - IPC 层 quantdesk/ipc：ZMQ XPUB（事件下行）/ PULL（订单意图上行）+ 心跳信道  
   （bar/order/trade 的跨进程编解码集中在 engine/runner.py 的 *_to_dict / *_from_dict，枚举一律取 .value）
 - 公共基建 quantdesk/core：resilience（Backoff + ReconnectWatchdog：探活/判死广播/退避重连/  
-  重连后重放义务）· secrets（DPAPI 凭据保险库，只写不读、掩码回显、密文与本机 Windows 账户绑定）
+  重连后重放义务）· secrets（DPAPI 凭据保险库，只写不读、掩码回显、密文与本机 Windows 账户绑定）·  
+  ratelimit（最小间隔限速器：睡眠在锁内补齐到目标时刻，放行间隔锚在**实际放行时刻**——
+  限速器失效在公开接口上等于自招封禁）
 - 适配器层 quantdesk/adapters：base/（两个 ABC + **optional.py 通道元数据合同与惰性导入**）  
-  + data/（qmt_xtdata · tdx_aidata · ths_ifind · akshare_feed · tushare_feed · federated 路由降级）  
+  + data/（qmt_xtdata · tdx_aidata · ths_ifind · akshare_feed · tushare_feed ·  
+  **tx_quote / em_quote（公开 HTTP 行情，免账号免 SDK，official=False，用主依赖 httpx）** ·  
+  federated 路由降级）  
   + brokers/（paper_broker · qmt_broker · gm_broker · easytrader_broker）  
   · 注册表自动扫描（模块级 `ADAPTER` 导出才登记；SDK 缺失 → 状态 `unready` 如实上报而非隐藏；  
   `default_enabled=False` → **注册表源头不可见**，只有设置页打开 enable_flag 才进入交易 API 视野）
 - 存储层 quantdesk/store：db.py(SQLite WAL) / models_db.py（strategies / orders / trades /  
-  positions_snapshot / watchlist / compliance / backtest_runs / **reconcile_diff** / **run_log**）/  
+  positions_snapshot / watchlist / compliance / backtest_runs / **reconcile_diff** / **run_log** /  
+  **daily_flow（当日买卖量收盘定格）**）/  
   parquet_store.py（data/parquet/{market}/{symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线按月分文件；  
   db 路径惰性取 settings.data_dir）
 - 用户策略 strategies/：只依赖 BaseStrategy；引擎 importlib 动态加载
@@ -191,3 +211,30 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
 - 新增文档：`docs/商业落地工程方案.md`（v2.0 工程方案：产品定位/接入矩阵/运行时架构/
   安全合规强制清单/双层验证协议/交付与备份/路线图/风险登记册/诚实限制）、
   `docs/adapter_dev_guide.md`（新增通道 SOP）。
+
+2026-11-04（同日续）· **只读盯盘轮**（Integ-05）：与主流软件「结合」之外，本机现在有一台
+**不需要任何券商权限就能看真实行情**的看盘终端（A股 + 港股）。
+
+- **两个免账号公开行情通道**：`tx_quote`（腾讯批量五档 + 内外盘，一次请求 60 只，盯盘池轮询主源）、
+  `em_quote`（东财逐笔/分时/个股扩展字段，明细源）。用主依赖 `httpx` 直连，`requires=()`、
+  `official=False`（UI 红字），无凭据表单——与"待权限"的 QMT/通达信是两类通道，故各出接入卡。
+- **买卖量口径（本轮最容易自欺的一处，结论钉在这里）**：主口径 = **外盘/内盘**。A股两源互证
+  （腾讯 `outer` 与东财 `f49` 实测逐位相等）；**港股只有东财单源**（腾讯港股不给），界面与文档
+  一律按单源表述，不借 A股那句抬精度。逐笔只做小/中/大/特大**分层**与明细，因其**含盘后成交**
+  （A股 +8.11%、港股 −3.14% vs 官方总量），差值 `tick_vs_official_pct` 直接显示不吞掉。
+  方向码 `1/2/4` 每日按官方内外盘反解校准，只有置信结果才写当日缓存；港股逐笔只有 `1/2`。
+- **每日自动**：盘中 `watch_poll` → 15:05/16:10 定格当日买卖量（`daily_flow`）→
+  15:25/16:25 自动回补日 K（`data_store.backfill()`：只补缺、不覆盖、写入后自检）。
+  **休市时自动路径零外呼**（面板显示"休市中：未外呼"），只有手动刷新 `force` 才打。
+- **新手指引 `/guide`**：101 条术语 × 10 类，每条含一句话/展开/算例/常见误解/在哪能看到/关联，
+  import 期自检重复 slug、未知分类与断链（内容型数据坏了只会静默缺条）。
+- **本轮查出 16 处缺陷**（逐个有回归锁，详见进度日志）：其中 2 处属"图上看起来一切正常"——
+  ① 东财 `klt` 分钟数写成秒（M5 静默返回 60 分钟线）；② 港股 `f51/f52` 实为 52 周高/低却输出成
+  `limit_up/limit_down`（界面会出现"涨停 656.70"）。1 处属**纪律复发**：
+  `_compute_flow` 缓存为空即静默降级成逐笔口径，而界面仍写"主口径=官方内外盘"——
+  「运行期要取的东西必须在调用点取」这条规则本轮又兑现一次（`_ensure_live`）。
+- **公开接口纪律**（宪法第 11 条新增）：限速器不许失效（本轮修掉 undersleep）、按主机冷却、
+  休市不外呼、多端点共享 TTL、口径缺失只能如实标注。
+- 新增文档：`docs/integration/tx_quote.md`、`docs/integration/em_quote.md`（含真机回显与在线核对清单）。
+- **诚实限制**：两市收盘时才交付，**盘中实时跳动尚未真机确认**（链路/结构已验，跳动本身待下一
+  交易日 09:15 后复查）；轮询非推送（3s），真 tick 需 QMT/通达信官方 SDK；历史逐笔无法回看。
