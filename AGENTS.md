@@ -41,23 +41,39 @@ Python 3.11+ · uv · FastAPI(REST + WebSocket) · SQLModel(SQLite, WAL) · pyar
 pyzmq(XPUB/SUB 事件 + PUSH/PULL 订单意图) · msgpack · pandas · pytest · APScheduler(盘后任务)  
 前端：Vite + React 18 + TypeScript(strict) · zustand · lightweight-charts · echarts ·  
 @monaco-editor/react · 桌面壳：pywebview  
-交易：xtquant/QMT（主力）· 掘金 gm（备选）· easytrader（默认禁用）· 内置模拟撮合
+交易：xtquant/QMT·miniQMT（主力）· 掘金 gm（备选）· easytrader（同花顺客户端，默认禁用）· 内置模拟撮合  
+行情/数据：QMT xtdata · 通达信（官方 TdxAiData 或 pytdx 择一）· 同花顺 iFinD · AKShare · Tushare ·  
+federated 降级路由（以上 SDK 全为**可选依赖**，不进 pyproject，惰性导入，缺失如实上报未就绪）
 
 ## 架构分层与职责
 
 - UI 层 frontend/src：行情面板 / 策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 /  
   报备清单 / 设置（全局模拟盘开关）
-- API 网关层 quantdesk/api：routes\_* + ws.py（/ws/events 统一事件流）；只依赖 services
-- 服务层 quantdesk/services：market_data / trading / strategy_mgr / backtest_svc / data_store
-- 引擎层 quantdesk/engine：EventBus(core) · RiskGate（订单唯一咽喉）· runner（策略子进程装载）  
-  · supervisor（心跳 5s / 判死 15s / 重启上限 3 次每小时）· backtest + matching（回测与模拟共用撮合）
-- IPC 层 quantdesk/ipc：ZMQ XPUB（事件下行）/ PULL（订单意图上行）+ 心跳信道
-- 适配器层 quantdesk/adapters：base/（两个 ABC）+ data/（qmt_xtdata · tdx_aidata · ths_ifind ·  
-  akshare_feed · tushare_feed · federated 路由降级）+ brokers/（paper_broker · qmt_broker ·  
-  gm_broker · easytrader_broker）+ 注册表自动扫描
+- API 网关层 quantdesk/api：routes\_* + ws.py（/ws/events 统一事件流）；只依赖 services  
+  （routes_channels 通道全景/探活/凭据/对账 · routes_interop 板块与公式互操作 ·  
+  routes_system 日志检索与 adapters · routes_backtest 同步+异步队列与进度）
+- 服务层 quantdesk/services：market_data / trading / strategy_mgr / backtest_svc / data_store  
+  · **channels（ChannelHub 按配置动态装配：实时主源单一/历史降级链/凭据缺失 fail-closed/  
+  实盘通道惰性解析+15s 冷却）** · **realtime（RealtimePump：订阅上行→行情下行→意图过闸→回报回投）** ·  
+  **reconcile（周期对账：通道快照 vs SQLite，差异落 reconcile_diff + RISK 广播）** ·  
+  **logsink（LOG/RISK 批量落 run_log，可检索）** · **interop（通达信 .blk / 同花顺·东财 TXT 板块双向 +  
+  通达信/同花顺条件选股公式方言编译，规则求值与公式同源）**
+- 引擎层 quantdesk/engine：EventBus(core) · RiskGate（订单唯一咽喉，含 live_provider 动态实盘解析 +  
+  风控热参）· runner（策略子进程装载）· supervisor（心跳 5s / 判死 15s / 重启上限 3 次每小时，  
+  subscribe 意图上收）· backtest + matching（回测与模拟共用撮合，BacktestEngine.run(on_progress=…)）
+- IPC 层 quantdesk/ipc：ZMQ XPUB（事件下行）/ PULL（订单意图上行）+ 心跳信道  
+  （bar/order/trade 的跨进程编解码集中在 engine/runner.py 的 *_to_dict / *_from_dict，枚举一律取 .value）
+- 公共基建 quantdesk/core：resilience（Backoff + ReconnectWatchdog：探活/判死广播/退避重连/  
+  重连后重放义务）· secrets（DPAPI 凭据保险库，只写不读、掩码回显、密文与本机 Windows 账户绑定）
+- 适配器层 quantdesk/adapters：base/（两个 ABC + **optional.py 通道元数据合同与惰性导入**）  
+  + data/（qmt_xtdata · tdx_aidata · ths_ifind · akshare_feed · tushare_feed · federated 路由降级）  
+  + brokers/（paper_broker · qmt_broker · gm_broker · easytrader_broker）  
+  · 注册表自动扫描（模块级 `ADAPTER` 导出才登记；SDK 缺失 → 状态 `unready` 如实上报而非隐藏；  
+  `default_enabled=False` → **注册表源头不可见**，只有设置页打开 enable_flag 才进入交易 API 视野）
 - 存储层 quantdesk/store：db.py(SQLite WAL) / models_db.py（strategies / orders / trades /  
-  positions_snapshot / watchlist / compliance / backtest_runs）/ parquet_store.py  
-  （data/parquet/{market}/{symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线按月分文件）
+  positions_snapshot / watchlist / compliance / backtest_runs / **reconcile_diff** / **run_log**）/  
+  parquet_store.py（data/parquet/{market}/{symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线按月分文件；  
+  db 路径惰性取 settings.data_dir）
 - 用户策略 strategies/：只依赖 BaseStrategy；引擎 importlib 动态加载
 
 ## 核心契约（必须原样实现，不得改名或删减字段）
@@ -82,7 +98,15 @@ place_order(order: Order) -> Order   # 返回补齐 broker_order_id 的快照；
 cancel_order(order_id) -> bool       # 返回是否受理；最终状态以回报为准  
 get_position(symbol=None) -> list[Position]   # available 必须遵守 T+1（当日买入为 0）  
 get_account() -> Account / get_orders(status=None) -> list[Order]  
-get_trades(start=None) -> list[Trade] / poll()  # 无回调能力通道（easytrader）实现轮询
+get_trades(start=None) -> list[Trade] / poll()  # 无回调能力通道（easytrader）实现轮询  
+snapshot_for_reconcile() -> (list[Order], list[Trade], list[Position], Account|None)  
+# 可选但对账敏感通道应实现：一次性取一致快照，避免逐项查询期间被 poll() 改动而误报
+
+通道元数据合同（adapters/base/optional.py 的 meta_of 读取，UI 与路由的事实源）：  
+name / label(中文名) / prereq(用户需完成的前置一句话) / official(False→UI 红字「非官方接口」) /  
+requires(可选 SDK 模块名，缺失→status=unready + missing) / requires_any(True→任一依赖可用即就绪) /  
+default_enabled(False→注册表源头不可见) / enable_flag(对应 Settings 布尔字段) / is_paper /  
+capabilities。SDK 一律惰性导入（import_optional，缺失抛带安装引导的 AdapterError），顶层 import 禁止。
 
 RiskGate（engine/riskgate.py）：  
 submit(intent: Order) -> Order   # 三道闸唯一入口  
@@ -130,3 +154,30 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
   supervisor 首次心跳前不做心跳判死）；RateLimiter 已修睡眠唤醒 undersleep 缺陷。
 - 下一日（权限就位后）：QMT 行情接入（D13 卡片）→ 实盘通道（D21-23 卡片，只读起步）；
   token 就位后先跑 verify_sources.py 交叉对数。
+
+2026-11-04（同日续）· **主流股票软件接入轮**（Integ-01/02/03）：与各大主流股票软件「结合」
+从设想变成注册表里的 10 个通道事实。
+
+- **接入层地基**：`adapters/base/optional.py`（可选 SDK 惰性导入 + 通道元数据合同）、注册表
+  启停与状态如实上报、`core/resilience.py`（退避 + 断线判死广播 + 重连后重放义务）。
+- **六个通道**：`qmt_xtdata` + `qmt`（miniQMT 主力，行情 tick/分钟 + 交易回调）、
+  `tdx_aidata`（官方 SDK / pytdx 择一 + 串行队列）、`ths_ifind`（配额三层缓存）、
+  `gm`（终端线程模型 + 请求投递）、`easytrader`（默认禁用 + poll 差异生成事件 + 控件截图）。
+  每通道配 `tests/mocks/` 假 SDK 离线单测 + `docs/integration/*.md` 在线核对卡。
+- **运行时装配 v2**：`services/channels.py`（ChannelHub）、`services/realtime.py`（RealtimePump）、
+  `services/reconcile.py`、`services/logsink.py`、`core/secrets.py`（DPAPI 保险库）、
+  `services/interop.py`（通达信 .blk / 同花顺·东财板块双向 + 公式方言编译）。
+- **修掉的产品级断点**（此前测试全绿但链路不通）：① 策略 `ctx.buy()` 的 order_intent 从未进
+  RiskGate；② subscribe 意图无人消费；③ `/` 404（SPA 未托管，桌面壳打开即白屏）；
+  ④ 实盘确认文本只在前端（直连 API 可绕过）；⑤ bar 序列化 `str(enum)`；
+  ⑥ 实时 bar dt 不取周期起点导致子进程历史缓冲刷重复行。
+- **安全**：凭据只进 DPAPI 保险库（只写不读、掩码回显、密文与本机 Windows 账户绑定）；
+  风控热参进设置页；`simulation_only=False` / `enable_easytrader=True` / `broker_channel≠paper`
+  三者都要求服务端校验确认文本「我知晓并承担实盘交易风险」。
+- pytest **583 passed**（240→583，network 默认跳过）。
+- **接入完成 ≠ 接入可交付**：六个通道凡「SDK 表面靠推断」的条目集中写在
+  `docs/integration/*.md` 第 8 节在线核对清单，须真机勾选后才能升为已实测；
+  QMT/掘金/iFinD/easytrader 真实下单仍待用户权限与账号（M5 需用户在场）。
+- 新增文档：`docs/商业落地工程方案.md`（v2.0 工程方案：产品定位/接入矩阵/运行时架构/
+  安全合规强制清单/双层验证协议/交付与备份/路线图/风险登记册/诚实限制）、
+  `docs/adapter_dev_guide.md`（新增通道 SOP）。
