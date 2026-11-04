@@ -13,20 +13,25 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import math
+import queue
 import re
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
 
-from quantdesk.core.enums import Side
+from quantdesk.core.enums import Frequency, Side
 from quantdesk.core.models import Trade
 from quantdesk.engine.backtest import BacktestConfig, BacktestEngine, BacktestResult
 from quantdesk.engine.matching import FeeCalculator
 from quantdesk.engine.strategy_base import BaseStrategy
 from quantdesk.store import repo
 from quantdesk.store.parquet_store import ParquetStore
+
+log = logging.getLogger(__name__)
 
 __all__ = ["compute_metrics", "equity_to_json", "available_strategies",
            "load_strategy", "BacktestService"]
@@ -35,11 +40,17 @@ _STRATEGY_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TRADING_DAYS = 252
 
 
-def _publish_log(message: str) -> None:
-    """向进程级事件枢纽发布 LOG（/ws/events 下行）。"""
+def _publish_log(payload) -> None:
+    """向进程级事件枢纽发布 LOG（/ws/events 下行）。
+
+    进度类消息带结构（action/run_id/done/total），前端按 action 分派——
+    纯文本消息仍然兼容（只填 message）。
+    """
     from quantdesk.core.events import SYSTEM_BUS, Event, EventType
 
-    SYSTEM_BUS.publish(Event(EventType.LOG, data={"message": message}, source="backtest"))
+    data = dict(payload) if isinstance(payload, dict) else {"message": str(payload)}
+    data.setdefault("message", "")
+    SYSTEM_BUS.publish(Event(EventType.LOG, data=data, source="backtest"))
 
 
 # ---------- 指标 ----------
@@ -172,39 +183,149 @@ def load_strategy(name: str) -> type[BaseStrategy]:
 # ---------- 服务 ----------
 
 class BacktestService:
-    """同步小任务版回测（D08）；异步队列化在 D10 视前端需要再加。"""
+    """回测编排：同步 run()（小任务/脚本用）+ 异步 submit()（前端用）。
 
-    def __init__(self, store: ParquetStore | None = None, db_path=None) -> None:
+    异步队列的必要性：1655 根日线 ≈ 3s，多标的/分钟线会到几十秒——同步 POST 会
+    占住请求线程、前端干等且无进度。现在 run_id 先落库（queued→running→completed/
+    failed），worker 线程执行，进度经 WS 与轮询双通道可见，中途失败的运行也留痕。
+    """
+
+    def __init__(self, store: ParquetStore | None = None, db_path=None,
+                 keep_results: int = 50) -> None:
         self.store = store or ParquetStore()
         self.db_path = db_path
+        self._queue: "queue.Queue[int]" = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._payloads: dict[int, dict] = {}
+        self._progress: dict[int, dict] = {}
+        self._results: dict[int, dict] = {}
+        self._results_order: list[int] = []
+        self._keep_results = keep_results
+        self._lock = threading.RLock()
 
+    # ---------- 异步队列 ----------
+    def submit(self, **kwargs) -> int:
+        """入队并立刻返回 run_id（校验策略名在入队前做，坏请求不占队列）。"""
+        cls = load_strategy(kwargs["strategy"])
+        kwargs["strategy"] = cls.name
+        run_id = repo.backtest_create(
+            strategy_name=cls.name, symbol=",".join(kwargs.get("symbols") or []),
+            freq=kwargs.get("freq", "1d"), start=str(kwargs.get("start") or ""),
+            end=str(kwargs.get("end") or ""),
+            params_json=json.dumps(kwargs.get("params") or {}, ensure_ascii=False),
+            db_path=self.db_path)
+        repo.backtest_set_status(run_id, "queued", db_path=self.db_path)
+        with self._lock:
+            self._payloads[run_id] = kwargs
+            self._progress[run_id] = {"run_id": run_id, "status": "queued",
+                                      "done": 0, "total": 0, "percent": 0.0}
+        self._ensure_worker()
+        self._queue.put(run_id)
+        return run_id
+
+    def _ensure_worker(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._drain, name="backtest-worker",
+                                            daemon=True)
+            self._thread.start()
+
+    def _drain(self) -> None:
+        while True:
+            run_id = self._queue.get()
+            if run_id is None:
+                return
+            payload = self._payloads.pop(run_id, None)
+            if payload is None:
+                continue
+            try:
+                out = self.run(run_id=run_id, **payload)
+                self._store_result(run_id, out)
+            except Exception as e:  # noqa: BLE001 单个任务失败不能带走 worker
+                log.exception("异步回测失败 run_id=%s", run_id)
+                self._set_progress(run_id, "failed", error=f"{e.__class__.__name__}: {e}")
+
+    def _store_result(self, run_id: int, out: dict) -> None:
+        with self._lock:
+            self._results[run_id] = {k: out[k] for k in
+                                     ("run_id", "metrics", "bars", "config", "trades",
+                                      "orders", "logs")}
+            self._results_order.append(run_id)
+            while len(self._results_order) > self._keep_results:
+                old = self._results_order.pop(0)
+                self._results.pop(old, None)
+                self._progress.pop(old, None)
+
+    def _set_progress(self, run_id: int, status: str, **extra) -> None:
+        with self._lock:
+            cur = self._progress.setdefault(run_id, {"run_id": run_id})
+            cur.update({"status": status, **extra})
+            if status == "running" and cur.get("total"):
+                cur["percent"] = round(100.0 * cur["done"] / cur["total"], 1)
+
+    def progress(self, run_id: int) -> dict:
+        with self._lock:
+            return dict(self._progress.get(run_id, {"run_id": run_id, "status": "unknown"}))
+
+    def stop_worker(self) -> None:
+        self._queue.put(None)
+
+    # ---------- 执行 ----------
     def run(self, *, strategy: str, symbols: list[str], params: dict | None = None,
             freq: str = "1d", start: str | None = None, end: str | None = None,
             initial_cash: float = 1_000_000.0, slippage: float = 0.0,
-            rf: float = 0.0) -> dict:
+            rf: float = 0.0, run_id: int | None = None) -> dict:
         cls = load_strategy(strategy)
         strat = cls(params=dict(params or {}))
         cfg = BacktestConfig(symbols=list(symbols), freq=freq, start=start, end=end,
                              initial_cash=float(initial_cash), slippage=float(slippage))
         engine = BacktestEngine(strat, cfg, store=self.store)
-        result = engine.run()
-        if result.bars == 0:
+
+        # 预检本地数据：没数据就不要建运行记录（异步队列里一条注定失败的 run 只会污染清单）
+        probe_freq = Frequency(cfg.freq) if not isinstance(cfg.freq, Frequency) else cfg.freq
+        if not any(not self.store.read(s, probe_freq, cfg.start, cfg.end, cfg.adjust).empty
+                   for s in cfg.symbols):
             raise ValueError(f"本地无数据：{symbols} {freq} {start}~{end}"
                              f"（请先在数据管理页下载）")
+
+        if run_id is None:
+            run_id = repo.backtest_create(
+                strategy_name=cls.name, symbol=",".join(symbols), freq=freq,
+                start=str(start or ""), end=str(end or ""),
+                params_json=json.dumps({"params": params or {}, "rf": rf},
+                                       ensure_ascii=False), db_path=self.db_path)
+        else:
+            repo.backtest_set_status(run_id, "running", db_path=self.db_path)
+
+        def _progress(done: int, total: int) -> None:
+            self._set_progress(run_id, "running", done=done, total=total)
+            _publish_log({"action": "backtest_progress", "run_id": run_id,
+                          "done": done, "total": total, "message":
+                              f"回测 {run_id} 进度 {done}/{total}"})
+
+        try:
+            result = engine.run(on_progress=_progress)
+            if result.bars == 0:
+                raise ValueError(f"本地无数据：{symbols} {freq} {start}~{end}"
+                                 f"（请先在数据管理页下载）")
+        except Exception as e:  # noqa: BLE001 失败也要留痕（前端轮询能看到原因）
+            repo.backtest_set_status(run_id, "failed",
+                                     remark=f"{e.__class__.__name__}: {e}",
+                                     db_path=self.db_path)
+            self._set_progress(run_id, "failed", error=str(e))
+            raise
+
         metrics = compute_metrics(result.equity, result.trades, rf=rf)
         equity_json = equity_to_json(result.equity)
 
-        run_id = repo.backtest_create(
-            strategy_name=cls.name, symbol=",".join(symbols), freq=freq,
-            start=str(start or ""), end=str(end or ""),
-            params_json=json.dumps(result.config | {"rf": rf}, ensure_ascii=False),
-            db_path=self.db_path)
         repo.backtest_finish(run_id, metrics_json=json.dumps(metrics, ensure_ascii=False),
                              equity_json=json.dumps(equity_json), status="completed",
                              db_path=self.db_path)
-        # 回测过程输出接事件流（D10：同步任务为完成后整体推送，异步流式在 M4 前补齐）
-        _publish_log(f"回测 {run_id} 完成：{cls.name} {symbols} "
-                     f"{len(result.trades)} 笔成交，总收益 {metrics['total_return']:.2%}")
+        self._set_progress(run_id, "completed", done=result.bars, total=result.bars)
+        _publish_log({"action": "backtest_done", "run_id": run_id, "message":
+                      f"回测 {run_id} 完成：{cls.name} {symbols} "
+                      f"{len(result.trades)} 笔成交，总收益 {metrics['total_return']:.2%}"})
         return {
             "run_id": run_id,
             "metrics": metrics,
@@ -220,7 +341,7 @@ class BacktestService:
         row = repo.backtest_get(run_id, db_path=self.db_path)
         if row is None:
             return None
-        return {
+        out = {
             "run_id": row.id,
             "strategy": row.strategy_name,
             "symbol": row.symbol,
@@ -231,9 +352,19 @@ class BacktestService:
             "status": row.status,
             "metrics": json.loads(row.metrics_json or "{}"),
             "equity": json.loads(row.equity_json or "[]"),
+            "remark": row.remark,
             "created_at": row.created_at,
             "finished_at": row.finished_at,
+            "progress": self.progress(run_id),
         }
+        cached = self._results.get(run_id)
+        if cached:
+            out.update({k: cached[k] for k in ("trades", "orders", "logs", "bars",
+                                               "config")})
+        return out
+
+    def list_runs(self, limit: int = 50) -> list[dict]:
+        return repo.backtest_list(limit=limit, db_path=self.db_path)
 
     # ---------- 序列化 ----------
     @staticmethod

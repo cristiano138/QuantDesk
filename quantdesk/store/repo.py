@@ -267,6 +267,94 @@ def backtest_get(run_id: int, db_path=None) -> BacktestRunRow | None:
         return s.get(BacktestRunRow, run_id)
 
 
+def backtest_set_status(run_id: int, status: str, remark: str = "", db_path=None) -> None:
+    """异步队列的中间态（queued/running/failed）；completed 走 backtest_finish。"""
+    with _write_lock, get_session(db_path) as s:
+        row = s.get(BacktestRunRow, run_id)
+        if row is not None:
+            row.status = status
+            if remark:
+                row.remark = remark[:2000]
+            if status == "failed":
+                row.finished_at = now_ms()
+            s.commit()
+
+
+def backtest_list(limit: int = 50, db_path=None) -> list[dict]:
+    with get_session(db_path) as s:
+        rows = s.exec(select(BacktestRunRow).order_by(
+            BacktestRunRow.created_at.desc()).limit(limit)).all()
+        return [{"run_id": r.id, "strategy": r.strategy_name, "symbol": r.symbol,
+                 "freq": r.freq, "start": r.start, "end": r.end, "status": r.status,
+                 "metrics": json.loads(r.metrics_json or "{}"),
+                 "created_at": r.created_at, "finished_at": r.finished_at}
+                for r in rows]
+
+
+# ---------- 运行日志（落库可检索） ----------
+def logs_append(rows: list[dict], db_path=None) -> int:
+    """批量写入（LogSink 每批一次事务，避免高频事件把库压垮）。"""
+    from quantdesk.store.models_db import LogRow
+
+    if not rows:
+        return 0
+    with _write_lock, get_session(db_path) as s:
+        for r in rows:
+            s.add(LogRow(ts=r["ts"], level=r.get("level", "INFO"),
+                         source=r.get("source", ""),
+                         strategy_id=r.get("strategy_id", ""),
+                         message=str(r.get("message", ""))[:4000]))
+        s.commit()
+    return len(rows)
+
+
+def logs_query(limit: int = 200, offset: int = 0, source: str | None = None,
+               level: str | None = None, contains: str = "", strategy_id: str | None = None,
+               since_ms: int | None = None, until_ms: int | None = None,
+               db_path=None) -> dict:
+    from sqlalchemy import func as sa_func
+
+    from quantdesk.store.models_db import LogRow
+
+    with get_session(db_path) as s:
+        stmt = select(LogRow)
+        count_stmt = select(sa_func.count(LogRow.id))
+        conds = []
+        if source:
+            conds.append(LogRow.source == source)
+        if level:
+            conds.append(LogRow.level == level)
+        if strategy_id:
+            conds.append(LogRow.strategy_id == strategy_id)
+        if contains:
+            conds.append(LogRow.message.contains(contains))
+        if since_ms:
+            conds.append(LogRow.ts >= since_ms)
+        if until_ms:
+            conds.append(LogRow.ts <= until_ms)
+        for c in conds:
+            stmt = stmt.where(c)
+            count_stmt = count_stmt.where(c)
+        total = int(s.exec(count_stmt).one())
+        rows = s.exec(stmt.order_by(LogRow.ts.desc(), LogRow.id.desc())
+                      .offset(offset).limit(min(limit, 1000))).all()
+        return {"total": total, "items": [
+            {"id": r.id, "ts": r.ts, "level": r.level, "source": r.source,
+             "strategy_id": r.strategy_id, "message": r.message} for r in rows]}
+
+
+def logs_purge(before_ms: int, db_path=None) -> int:
+    """保留期清理（盘后任务调用，防止日志表无限增长）。"""
+    from sqlalchemy import delete as sa_delete
+
+    from quantdesk.store.models_db import LogRow
+
+    with _write_lock, get_session(db_path) as s:
+        result = s.exec(sa_delete(LogRow).where(LogRow.ts < before_ms))
+        s.commit()
+        return int(result.rowcount or 0)
+
+
 # ---------- 交易日（SQLModel 侧，与 core/calendar 共表） ----------
 def trading_days_upsert(rows: list[tuple[str, int]], db_path=None) -> None:
     from quantdesk.store.models_db import TradingDayRow

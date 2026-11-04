@@ -45,6 +45,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()                              # D03：启动自动建表（幂等）
 
     from quantdesk.services.channels import get_hub
+    from quantdesk.services.logsink import get_log_sink
+    from quantdesk.services.realtime import get_pump
     from quantdesk.services.reconcile import get_reconcile_service
     from quantdesk.services.scheduler import PostCloseScheduler
     from quantdesk.services.trading import get_trading_service
@@ -52,6 +54,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     hub = get_hub()
     hub.start()                            # 预热已就绪的行情通道（失败的只记录不阻断）
     get_trading_service()                   # 建立交易编排（paper + 待确认单恢复）
+    sink = get_log_sink()
+    sink.start()                            # LOG/RISK 事件落库（可检索的运行痕迹）
+    pump = get_pump()
+    pump.start()                            # 实时泵：行情→快照/撮合/策略进程
     reconciler = get_reconcile_service()
     reconciler.start()                      # 实盘/模拟盘周期对账（差异即事故）
     sched = PostCloseScheduler()           # D27：盘后复权刷新（交易日 18:00）
@@ -59,6 +65,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     sched.stop()
     reconciler.stop()
+    pump.stop()
+    sink.stop()
     hub.stop()
 
 

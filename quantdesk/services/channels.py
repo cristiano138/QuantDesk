@@ -106,6 +106,7 @@ class ChannelHub:
         self.db_path = db_path
         self._feeds: dict[str, DataFeedAdapter] = {}
         self._feed_errors: dict[str, str] = {}
+        self._fed = None                          # FederatedFeed 单例（持有订阅引用计数）
         self._broker: BrokerAdapter | None = None
         self._broker_channel: str = ""
         self._broker_error: str = ""
@@ -200,13 +201,21 @@ class ChannelHub:
         return ""
 
     def federated(self) -> "object":
-        """组装好的组合行情源（services 层唯一直接使用的行情入口，ADR-4）。"""
+        """组装好的组合行情源（services 层唯一直接使用的行情入口，ADR-4）。
+
+        必须缓存成单例：FederatedFeed 持有实时订阅的引用计数表，每次新建实例
+        计数就丢——订阅会在下一次装配时被当成全新标的重复向主源挂一遍。
+        """
         from quantdesk.adapters.data.federated import FederatedFeed
 
-        hist = self.history_feeds()
-        fin = self.financial_feeds()
-        return FederatedFeed(history_feeds=hist, financial_feeds=fin or hist,
-                             store=self.store)
+        with self._lock:
+            if self._fed is not None:
+                return self._fed
+            hist = self.history_feeds()
+            fin = self.financial_feeds()
+            self._fed = FederatedFeed(history_feeds=hist, financial_feeds=fin or hist,
+                                      store=self.store, realtime_feed=self.realtime_feed())
+            return self._fed
 
     # ---------- 交易通道 ----------
     def live_broker(self) -> BrokerAdapter | None:
@@ -316,6 +325,12 @@ class ChannelHub:
 
     def stop(self) -> None:
         with self._lock:
+            if self._fed is not None:
+                try:
+                    self._fed.disconnect()
+                except Exception as e:  # noqa: BLE001 退出清理尽力而为
+                    log.debug("组合行情源断开异常: %s", e)
+                self._fed = None
             for name, inst in list(self._feeds.items()):
                 try:
                     inst.disconnect()

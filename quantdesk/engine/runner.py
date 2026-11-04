@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from quantdesk.core.enums import Frequency
-from quantdesk.core.models import Bar, Position, Tick
+from quantdesk.core.models import Bar, Order, Position, Tick, Trade
 from quantdesk.engine.strategy_base import BaseStrategy, StrategyContext
 from quantdesk.ipc.bridge import BridgeClient
 from quantdesk.store.parquet_store import HISTORY_COLUMNS
@@ -51,7 +51,11 @@ def load_strategy_from_file(path: str, params: dict | None = None) -> BaseStrate
 # ---------- Bar/Tick ↔ dict ----------
 
 def bar_to_dict(b: Bar) -> dict:
-    return {"symbol": b.symbol, "freq": str(b.freq), "dt": b.dt.isoformat(),
+    # freq 必须走 .value：str(Frequency.D1) 会得到 "Frequency.D1"，
+    # 子进程 bar_from_dict 拿到的周期就成了脏值（回测/实盘同构在 IPC 层断裂）
+    return {"symbol": b.symbol,
+            "freq": b.freq.value if hasattr(b.freq, "value") else str(b.freq),
+            "dt": b.dt.isoformat(),
             "open": b.open, "high": b.high, "low": b.low, "close": b.close,
             "volume": b.volume, "amount": b.amount}
 
@@ -69,6 +73,38 @@ def tick_from_dict(d: dict) -> Tick:
                 amount=d.get("amount", 0.0),
                 bids=[tuple(x) for x in d.get("bids", [])],
                 asks=[tuple(x) for x in d.get("asks", [])])
+
+
+def order_to_dict(o) -> dict:
+    return {
+        "order_id": o.order_id, "symbol": o.symbol,
+        "side": o.side.value if hasattr(o.side, "value") else str(o.side),
+        "price": o.price, "volume": o.volume,
+        "order_type": o.order_type.value if hasattr(o.order_type, "value") else str(o.order_type),
+        "status": o.status.value if hasattr(o.status, "value") else str(o.status),
+        "filled_volume": o.filled_volume, "avg_filled_price": o.avg_filled_price,
+        "message": o.message, "strategy_id": o.strategy_id,
+        "created_at": o.created_at, "updated_at": o.updated_at,
+    }
+
+
+def order_from_dict(d: dict) -> Order:
+    from quantdesk.core.enums import OrderStatus, OrderType, Side
+
+    return Order(order_id=d["order_id"], symbol=d["symbol"], side=Side(d["side"]),
+                 price=d["price"], volume=d["volume"], order_type=OrderType(d["order_type"]),
+                 status=OrderStatus(d["status"]), filled_volume=d.get("filled_volume", 0),
+                 avg_filled_price=d.get("avg_filled_price", 0.0),
+                 message=d.get("message", ""), strategy_id=d.get("strategy_id", ""),
+                 created_at=d.get("created_at", 0), updated_at=d.get("updated_at", 0))
+
+
+def trade_from_dict(d: dict) -> Trade:
+    from quantdesk.core.enums import Side
+
+    return Trade(trade_id=d["trade_id"], order_id=d["order_id"], symbol=d["symbol"],
+                 side=Side(d["side"]), price=d["price"], volume=d["volume"],
+                 amount=d["amount"], traded_at=d["traded_at"])
 
 
 # ---------- IPC 版上下文 ----------
@@ -92,7 +128,12 @@ class IPCStrategyContext(StrategyContext):
         if tag == "bar":
             bar = bar_from_dict(data)
             buf = self._bars.setdefault(bar.symbol, deque(maxlen=self._history_maxlen))
-            buf.append(bar)
+            # 按 dt upsert：实时下行推的是「形成中的当前 bar」，同一根会被多次更新；
+            # 直接 append 会把历史缓冲刷满重复行，均线类策略算出来的就是错的。
+            if buf and buf[-1].dt == bar.dt:
+                buf[-1] = bar
+            else:
+                buf.append(bar)
             if self._strategy is not None:
                 self._strategy.on_bar(bar)
         elif tag == "tick":
@@ -102,6 +143,12 @@ class IPCStrategyContext(StrategyContext):
                 self._strategy.on_tick(tick)
         elif tag == "position":
             self._positions = data.get("positions", [])
+        elif tag == "order":
+            if self._strategy is not None:
+                self._strategy.on_order(order_from_dict(data))
+        elif tag == "trade":
+            if self._strategy is not None:
+                self._strategy.on_trade(trade_from_dict(data))
         elif tag == "control":
             if data.get("action") == "stop":
                 return False

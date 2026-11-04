@@ -154,3 +154,20 @@ class ReconcileDiffRow(SQLModel, table=True):
     ref: str = ""
     detail_json: str = "{}"
     created_at: int = Field(default_factory=now_ms)
+
+
+class LogRow(SQLModel, table=True):
+    """运行日志落库（策略 stdout 之外的可检索痕迹）。
+
+    落库理由：supervisor 只在内存留 10 条、崩溃才写文件——「昨天 14:20 那次拒单
+    到底说了什么」这种问题必须能被回答。写入走异步批量（LogSink），不拖慢事件总线。
+    """
+
+    __tablename__ = "run_log"
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: int = Field(index=True)
+    level: str = Field(default="INFO", index=True)
+    source: str = Field(default="", index=True)
+    strategy_id: str = Field(default="", index=True)
+    message: str = ""

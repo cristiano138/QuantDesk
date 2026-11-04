@@ -36,33 +36,43 @@ class AdapterMeta:
     """注册表侧读取到的适配器元数据（类属性的归一化快照）。"""
 
     __slots__ = ("name", "kind", "label", "prereq", "official", "requires",
-                 "default_enabled", "enable_flag", "is_paper", "capabilities")
+                 "requires_any", "default_enabled", "enable_flag", "is_paper",
+                 "capabilities")
 
     def __init__(self, name: str, kind: str, label: str, prereq: str, official: bool,
                  requires: tuple[str, ...], default_enabled: bool, enable_flag: str,
-                 is_paper: bool, capabilities: tuple[str, ...]) -> None:
+                 is_paper: bool, capabilities: tuple[str, ...],
+                 requires_any: bool = False) -> None:
         self.name = name
         self.kind = kind                    # "data" | "broker"
         self.label = label
         self.prereq = prereq
         self.official = official
         self.requires = requires
+        self.requires_any = requires_any
         self.default_enabled = default_enabled
         self.enable_flag = enable_flag
         self.is_paper = is_paper
         self.capabilities = capabilities
 
     def deps_ready(self) -> bool:
-        return all(dependency_available(m) for m in self.requires)
+        """requires_any=True → 任一依赖可用即就绪（通达信：官方 SDK 或 pytdx 择一）。"""
+        if not self.requires:
+            return True
+        flags = [dependency_available(m) for m in self.requires]
+        return any(flags) if self.requires_any else all(flags)
 
     def missing_deps(self) -> list[str]:
-        return [m for m in self.requires if not dependency_available(m)]
+        absent = [m for m in self.requires if not dependency_available(m)]
+        # 「任一可用」且确实有一条路通着，就不算缺——否则面板永远列着另一条用不上的路
+        return [] if (self.requires_any and self.deps_ready()) else absent
 
     def to_dict(self) -> dict:
         return {
             "name": self.name, "kind": self.kind, "label": self.label,
             "prereq": self.prereq, "official": self.official,
-            "requires": list(self.requires), "missing": self.missing_deps(),
+            "requires": list(self.requires), "requires_any": self.requires_any,
+            "missing": self.missing_deps(),
             "deps_ready": self.deps_ready(),
             "default_enabled": self.default_enabled, "enable_flag": self.enable_flag,
             "is_paper": self.is_paper, "capabilities": list(self.capabilities),
@@ -115,6 +125,7 @@ def meta_of(cls: type, kind: str) -> AdapterMeta:
         prereq=getattr(cls, "prereq", ""),
         official=bool(getattr(cls, "official", True)),
         requires=tuple(getattr(cls, "requires", ()) or ()),
+        requires_any=bool(getattr(cls, "requires_any", False)),
         default_enabled=bool(getattr(cls, "default_enabled", True)),
         enable_flag=str(getattr(cls, "enable_flag", "")),
         is_paper=bool(getattr(cls, "is_paper", False)),

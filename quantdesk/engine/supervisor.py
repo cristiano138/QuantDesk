@@ -31,6 +31,7 @@ class StrategySupervisor:
                  db_path=None, event_bus: EventBus | None = None,
                  heartbeat_interval: float = 5.0, dead_after: float = 15.0,
                  max_restarts_per_hour: int = 3, on_intent=None,
+                 on_subscribe=None,
                  monitor_tick: float = 0.2, spawn_grace: float = 30.0) -> None:
         self.strategy_path = strategy_path
         self.params = dict(params)
@@ -41,8 +42,10 @@ class StrategySupervisor:
         self.dead_after = dead_after
         self.max_restarts_per_hour = max_restarts_per_hour
         self._on_intent = on_intent            # 上行意图回调（订单路由等）
+        self._on_subscribe = on_subscribe      # 订阅登记回调（实时泵据此扇出行情）
         self.monitor_tick = monitor_tick
         self.spawn_grace = spawn_grace         # 首次心跳前的宽限（覆盖慢启动导入期）
+        self.subscriptions: set[str] = set()   # 策略声明的订阅标的
 
         self.bridge = BridgeMain()
         self._proc = None
@@ -153,6 +156,16 @@ class StrategySupervisor:
                     self._publish_position_snapshot()
                 except Exception:                  # noqa: BLE001
                     pass
+            elif tag == "subscribe":
+                # 策略 ctx.subscribe() 声明的标的：登记 + 交给实时泵（行情下行靠它扇出）
+                new = {str(s) for s in (data.get("symbols") or [])}
+                added = new - self.subscriptions
+                self.subscriptions |= new
+                if added and self._on_subscribe is not None:
+                    try:
+                        self._on_subscribe(self.strategy_id, sorted(self.subscriptions))
+                    except Exception:              # noqa: BLE001 回调异常不拖垮守护线程
+                        self._publish(EventType.LOG, {"message": "on_subscribe 回调异常"})
             elif tag == "log":
                 self.last_logs.append(str(data.get("message", "")))
                 self._publish(EventType.LOG, data | {"strategy_id": self.strategy_id})
@@ -161,6 +174,10 @@ class StrategySupervisor:
                     self._on_intent(tag, data)
                 except Exception:                 # noqa: BLE001 回调异常不拖垮守护
                     self._publish(EventType.LOG, {"message": "on_intent 回调异常"})
+
+    def deliver(self, tag: str, data: dict) -> None:
+        """下行投递（bar/tick/order/trade/control）——实时泵与回报桥接使用。"""
+        self.bridge.publish(tag, data)
 
     def _check_health(self) -> None:
         with self._lock:

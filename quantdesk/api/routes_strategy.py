@@ -19,6 +19,7 @@ class SaveStrategyRequest(BaseModel):
 class StartStrategyRequest(BaseModel):
     mode: str = Field(default="paper", description="paper / live")
     params: dict = Field(default_factory=dict)
+    freq: str = Field(default="1d", description="实时下行聚合周期：1d / 1m / 5m / 15m / 30m / 60m")
 
 
 @router.get("/files")
@@ -49,13 +50,21 @@ def start(strategy_id: str, req: StartStrategyRequest) -> dict:
     mgr = get_strategy_manager()
     path = f"{strategy_id}.py" if not strategy_id.endswith(".py") else strategy_id
     try:
-        return mgr.start(path, mode=req.mode, params=req.params)
+        return mgr.start(path, mode=req.mode, params=req.params, freq=req.freq)
     except StrategyGateError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/runtime/realtime")
+def realtime_state() -> dict:
+    """实时泵状态：谁订了什么、源是什么、扇出了多少（面板与排障用）。"""
+    from quantdesk.services.realtime import get_pump
+
+    return get_pump().status()
 
 
 @router.post("/{strategy_id}/stop")

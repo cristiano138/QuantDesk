@@ -15,7 +15,7 @@ from datetime import datetime
 import pandas as pd
 
 from quantdesk.core.enums import Frequency
-from quantdesk.core.models import Bar, Order, Position, Tick
+from quantdesk.core.models import Bar, Order, Position, Tick, Trade
 
 __all__ = ["StrategyContext", "BaseStrategy"]
 
@@ -78,6 +78,15 @@ class BaseStrategy:
 
     def on_tick(self, tick: Tick) -> None:
         """tick 驱动（实时模拟/实盘路径）。"""
+
+    def on_order(self, order: Order) -> None:
+        """委托状态回报（三种模式同构：回测/模拟/实盘都走这里）。"""
+
+    def on_trade(self, trade: Trade) -> None:
+        """成交回报。"""
+
+    def on_timer(self, now: datetime) -> None:
+        """定时钩子（运行时按固定间隔驱动；回测按 bar 时间驱动）。"""
 
     def on_stop(self) -> None:
         """停止钩子。"""

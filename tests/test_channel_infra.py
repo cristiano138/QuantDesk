@@ -69,6 +69,35 @@ def test_meta_of_reads_class_declared_metadata_with_defaults():
     assert m.capabilities == ()                    # 未声明能力 → 空
 
 
+def test_requires_any_semantics():
+    """通达信这类「双传输层择一」通道：装了一条路就不能报 unready。"""
+    class OneWay:
+        name = "tdx_aidata"
+        requires = ("TdxAiData", "pytdx")
+        requires_any = True
+
+    class AllWay:
+        name = "strict"
+        requires = ("pandas", "no_such_module_xyz")
+
+    any_meta = meta_of(OneWay, kind="data")
+    all_meta = meta_of(AllWay, kind="data")
+    assert any_meta.deps_ready() is False                  # 两个都没装
+    assert any_meta.missing_deps() == ["TdxAiData", "pytdx"]
+    assert all_meta.deps_ready() is False
+    assert all_meta.missing_deps() == ["no_such_module_xyz"]
+
+    import sys
+    import types
+
+    sys.modules["pytdx"] = types.ModuleType("pytdx")
+    try:
+        assert any_meta.deps_ready() is True               # 任一条路通即就绪
+        assert any_meta.missing_deps() == []               # 不再列另一条路
+    finally:
+        sys.modules.pop("pytdx", None)
+
+
 def test_builtin_adapters_describe_with_capabilities():
     rows = {r["name"]: r for r in describe_adapters()}
     assert "akshare" in rows and "paper" in rows
@@ -102,8 +131,6 @@ def test_disabled_adapter_invisible_to_trading_api(monkeypatch):
         get_adapter_class(name)
     row = next(r for r in describe_adapters() if r["name"] == name)
     assert row["status"] == "disabled"            # 面板可见（可引导启用），API 不可见
-    assert next(r for r in describe_adapters(include_disabled=False)
-                if True) is not None
     assert name not in [r["name"] for r in describe_adapters(include_disabled=False)]
 
 
@@ -115,8 +142,9 @@ def test_enabling_flag_makes_adapter_visible(monkeypatch):
     monkeypatch.setattr(cfg, "get_settings", lambda: s)
     assert name in list_adapters()
     assert get_adapter_class(name) is not None
-    assert next(r for r in describe_adapters() if r["name"] == name)["status"] == "unready" \
-        or True                                    # ready/unready 取决于本机 SDK，均合法
+    row = next(r for r in describe_adapters() if r["name"] == name)
+    assert row["status"] in ("ready", "unready")     # 取决于本机 SDK，两者都合法
+    assert name in [r["name"] for r in describe_adapters(include_disabled=False)]
 
 
 # ---------- 退避 ----------

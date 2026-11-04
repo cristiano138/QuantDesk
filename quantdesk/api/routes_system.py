@@ -53,3 +53,25 @@ def logs() -> list[dict]:
             "mtime": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
         })
     return sorted(out, key=lambda x: x["mtime"], reverse=True)[:100]
+
+
+@router.get("/logs/query")
+def logs_query(source: str | None = None, level: str | None = None,
+               contains: str = "", strategy_id: str | None = None,
+               since_ms: int | None = None, until_ms: int | None = None,
+               limit: int = 200, offset: int = 0) -> dict:
+    """运行日志检索（LOG/RISK 落库后按条件分页查）。"""
+    from quantdesk.services.logsink import get_log_sink
+
+    sink = get_log_sink()
+    sink.flush_now()                                 # 查前先冲队列，避免「刚发生的查不到」
+    return sink.query(source=source, level=level, contains=contains,
+                      strategy_id=strategy_id, since_ms=since_ms, until_ms=until_ms,
+                      limit=limit, offset=offset)
+
+
+@router.get("/logs/stats")
+def logs_stats() -> dict:
+    from quantdesk.services.logsink import get_log_sink
+
+    return get_log_sink().stats()

@@ -150,10 +150,16 @@ class BacktestEngine:
         self._seq = 0
 
     # ---------- 对外 ----------
-    def run(self) -> BacktestResult:
+    def run(self, on_progress=None) -> BacktestResult:
+        """执行回测。
+
+        on_progress(done, total)：供服务层发布进度事件（异步队列化的前提）。
+        节流由调用方决定——引擎只负责按 bar 汇报，不做 I/O。
+        """
         self._data = self.feed.load(self.cfg.symbols, self.freq,
                                     self.cfg.start, self.cfg.end, self.cfg.adjust)
         stream = self._merge_stream()
+        total = sum(len(df) for df in self._data.values()) or 1
         self.strategy.bind(_BacktestContext(self))
         self.strategy.on_start()
 
@@ -175,6 +181,8 @@ class BacktestEngine:
             self._last_close[symbol] = bar.close
             equity_rows.append(self._equity_row(dt))
             n += 1
+            if on_progress is not None and (n % 25 == 0 or n == total):
+                on_progress(n, total)
 
         self.strategy.on_stop()
         # 收尾：未成交委托按撤单处理（回测结束语义）

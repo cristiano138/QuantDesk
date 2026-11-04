@@ -143,7 +143,7 @@ def test_service_run_no_data_raises(tmp_path):
 
 
 def test_api_backtest_roundtrip(tmp_path, monkeypatch):
-    """API 下发回测 → 同步返回结果 → GET 查询一致。"""
+    """API 下发回测：同步模式直接返回结果；异步模式返回 run_id 并轮询到完成。"""
     from quantdesk.store.db import init_db
     init_db(tmp_path / "api.db")
     store = write_store(tmp_path, synth_df(120))
@@ -156,7 +156,7 @@ def test_api_backtest_roundtrip(tmp_path, monkeypatch):
         assert {s["name"] for s in r.json()} >= {"dual_ma", "grid"}
 
         body = {"strategy": "dual_ma", "symbols": [SYMBOL], "params": {"volume": 500}}
-        r2 = client.post("/api/backtest", json=body)
+        r2 = client.post("/api/backtest", json=body | {"async_run": False})
         assert r2.status_code == 200, r2.text
         out = r2.json()
         assert out["bars"] == 120
@@ -165,6 +165,19 @@ def test_api_backtest_roundtrip(tmp_path, monkeypatch):
         r3 = client.get(f"/api/backtest/{run_id}")
         assert r3.status_code == 200
         assert r3.json()["metrics"] == out["metrics"]
+
+        # 异步：立即返回 run_id，轮询到 completed（进度可见是这条改造的目的）
+        r5 = client.post("/api/backtest", json=body)
+        assert r5.status_code == 200 and r5.json()["async"] is True
+        async_id = r5.json()["run_id"]
+        for _ in range(200):
+            state = client.get(f"/api/backtest/{async_id}").json()
+            if state["status"] in ("completed", "failed"):
+                break
+        assert state["status"] == "completed", state
+        assert state["metrics"] == out["metrics"]
+        assert client.get(f"/api/backtest/{async_id}/progress").json()["percent"] == 100.0
+        assert client.get("/api/backtest").json()          # 运行清单
 
         assert client.get("/api/backtest/99999").status_code == 404
         r4 = client.post("/api/backtest",
