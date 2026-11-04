@@ -174,7 +174,17 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
 - **安全**：凭据只进 DPAPI 保险库（只写不读、掩码回显、密文与本机 Windows 账户绑定）；
   风控热参进设置页；`simulation_only=False` / `enable_easytrader=True` / `broker_channel≠paper`
   三者都要求服务端校验确认文本「我知晓并承担实盘交易风险」。
-- pytest **583 passed**（240→583，network 默认跳过）。
+- pytest **592 passed**（240→592，network 默认跳过，连续两轮）。
+- **前端交付**：通道页 `/channels`（全景三态灯 / 探活 / 凭据表单 / 对账 / 实时泵状态）与
+  互操作页 `/interop`（板块导入导出 / 信号选股 / 公式编译）；`React.lazy` 首屏分包
+  （entry 271KB，gzip 91KB）；`BrowserRouter` + 后端 SPA 回落。浏览器 10 路由遍历 console 零错误，
+  UI 点「运行回测」异步链路实测出净值与成交。
+- **界面可配置的路由优先级**：`feed_priority_history/realtime/financial` 进设置白名单，
+  服务端按注册表校验通道名（允许写未就绪的源，拒绝错名与交易通道名）。
+- **事故留档（纪律）**：`store/db.py`、`store/parquet_store.py`、`engine/supervisor.py` 曾在模块顶层
+  `from quantdesk.config import data_dir`，夹具替换模块属性对它无效——一次全量跑把合成行情写进
+  真实 `data/parquet` 并覆盖了同年真实日线（已按合成特征判据分离、回写真实行、根治并加回归锁）。
+  **规则：运行期要取的东西必须在调用点取；改 API 响应结构必须全前端路由遍历**（契约漂移曾致 `/data` 白屏）。
 - **接入完成 ≠ 接入可交付**：六个通道凡「SDK 表面靠推断」的条目集中写在
   `docs/integration/*.md` 第 8 节在线核对清单，须真机勾选后才能升为已实测；
   QMT/掘金/iFinD/easytrader 真实下单仍待用户权限与账号（M5 需用户在场）。

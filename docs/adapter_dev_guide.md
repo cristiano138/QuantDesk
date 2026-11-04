@@ -252,8 +252,15 @@ def _ensure_watchdog(self) -> None:
    | 7 | 凭据缺失 | 结构化失败 + 原因，不静默退化、不假装连接 |
    | 8 | 可见性 | `default_enabled=False` 时注册表源头不可见，开 flag 后可见 |
 4. 网络用例一律打标记，默认跳过：`pytest -m "not network"`（发布门禁跑这条）。
-5. **不要碰真实开发库**。夹具改 `data_dir` 时注意 `store/db.py` 早期是模块级绑定（已改惰性取
-   `data_dir()`）；涉及单例（`_service` / `_hub` / `_pump`）的测试要在夹具里复位，否则会跨用例串状态。
+5. **不要碰真实开发库**。`store/db.py` 与 `store/parquet_store.py` 早期都在模块顶层
+   `from quantdesk.config import data_dir`，把当时的函数对象焊死——夹具替换的是**模块属性**，
+   两者不是同一个东西：单文件跑测试通过，全量跑就把合成行情写进真实 `data/parquet`
+   （按 dt 去重 keep=last，真实那半年日线被覆盖）。已改为**调用点取** `data_dir()`，
+   并有 `test_store_root_resolves_data_dir_at_construction` 锁住。涉及单例
+   （`_service` / `_hub` / `_pump`）的测试同样要在夹具里复位，否则跨用例串状态。
+6. **改动 API 响应结构 → 全前端路由逐个遍历**（console 零 error/warn）。本轮
+   `/api/system/adapters` 由 `{feeds, brokers}` 改为通道全景 `{channels}` 后，数据页仍按老契约读
+   `health.feeds.map` → React 整树卸载白屏，而后端 592 例全绿。类型契约漂移只能靠遍历抓。
 
 ---
 
@@ -328,7 +335,7 @@ uv run python -c "from quantdesk.adapters import describe_adapters; \
 | `on_tick` 后事件总线上 `source`/`freq` 是 `"Frequency.D1"` | 序列化用 `str(enum)` | 统一 `.value`（`bar_to_dict` / `_sv`） |
 | 实时 bar 在子进程历史缓冲里刷重复行 | bar 的 `dt` 取最后一个 tick 时间 | `_floor_dt` 取周期起点 + 子进程按 `dt` upsert |
 | 64 位下 DPAPI 崩 `OverflowError: int too long` | `ctypes` 默认返回类型截断 `LocalFree` 指针 | 显式绑定 `argtypes`/`restype` |
-| 测试把数据写进真实开发库 / 仓库根长出 `T0002/` | `store/db.py` 模块级绑定 `data_dir`；`Path("")` 变成 `.` 且 `is_dir()` 为真 | 惰性取 `data_dir()`；空串显式当"未配置" |
+| 测试把数据写进真实开发库 / 仓库根长出 `T0002/` | `store/db.py` 与 `store/parquet_store.py` 在模块顶层 `from quantdesk.config import data_dir`，把当时的函数对象焊死——夹具替换的是模块属性，两者不是同一个东西；`Path("")` 又变成 `.` 且 `is_dir()` 为真 | 运行期要取的东西必须在**调用点**取（改为 `__init__`/函数内 import）；空串显式当"未配置" |
 |  kwargs 全部没传进适配器 | `_instantiate` 用 `k in params` 而 `params` 是 `ValuesView` | 改 `inspect.signature(cls).parameters` 字典判断 |
 
 判据式的教训：**"能实例化"不等于"已接通"**。本轮最大的产品级缺陷是策略 `ctx.buy()` 生成的

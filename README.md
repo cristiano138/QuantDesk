@@ -53,6 +53,9 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 
 - 面板入口：`/channels`（通道管理）—— 三态如实上报 `ready / unready(缺哪个 SDK) / disabled`，
   一键探活、凭据表单、对账差异列表。**新增通道不需要改前端**（表单与列表由后端元数据驱动）。
+- 谁当主源、降级顺序，在「设置 → 行情通道路由优先级」里改（`feed_priority_history/realtime/financial`），
+  服务端按注册表校验通道名：写错名返回 400 并列出可选值；允许先把还没装 SDK 的源写上，装好即用。
+  实时只认主源——主源断线不切第二源，避免两条口径拼出一条失真时间轴。
 - SDK 全部是**可选依赖**，不进 `pyproject`：适配器顶层不 import，缺失时给安装引导而不是堆栈。
 - 「接入完成」≠「接入可交付」：六个通道凡依赖真机 SDK 的口径都归档在
   [`docs/integration/`](docs/integration) 的**在线核对清单**，须在装好 SDK 的机器上逐条勾选。
@@ -137,7 +140,7 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
   iFinD / 掘金 / easytrader / 内置模拟撮合）+ 通道元数据合同与注册表启停 + ChannelHub 动态装配 +
   实时链路闭环（订阅上行→行情下行→意图过闸→回报回投）+ 断线自愈重放 + DPAPI 凭据保险库 +
   周期对账 + LOG/RISK 落库检索 + 回测异步队列 + 通达信/同花顺板块与公式互操作 + 服务端确认门禁 +
-  SPA 托管。pytest 583 passed
+  SPA 托管。pytest 592 passed
 - **v1.1.0**（D30）：数据源口径审计 + 合规/运维页 + 桌面壳 + 盘后刷新任务
 - **v1.0.0**（D20）：数据底座 / 回测 / 撮合 / 模拟盘 / 三道闸 / 策略运行时 / 全部前端页
 
