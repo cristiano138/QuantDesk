@@ -108,6 +108,9 @@ def test_deps_ready_accepts_either_transport(monkeypatch):
     with fake_sdk("pytdx"):
         _hide_sdks(monkeypatch, "TdxAiData")
         assert TdxAiDataFeed.deps_ready() is True          # 只有 pytdx 也算通道可用
+    # 本机可能真的装了 pytdx（早前实测公开服务器时装的），所以"两者都缺"要显式屏蔽，
+    # 否则这条断言测的是这台机器的 pip list，不是通道语义
+    _hide_sdks(monkeypatch, "TdxAiData", "pytdx")
     assert TdxAiDataFeed.deps_ready() is False             # 两者都缺
 
 

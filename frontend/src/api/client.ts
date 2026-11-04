@@ -767,3 +767,267 @@ export async function getLogStats(): Promise<LogStats> {
   const r = await api.get<LogStats>('/system/logs/stats')
   return r.data
 }
+
+// ---------------- 盯盘（只读看盘：A股 + 港股）----------------
+
+export interface WatchSession {
+  market: string
+  state: 'open' | 'pre_open' | 'lunch' | 'post_close' | 'closed' | 'weekend'
+  note: string
+  local_time: string
+  weekday: number
+  weekend: boolean
+}
+
+export interface WatchRow {
+  symbol: string
+  name: string
+  market: string
+  last: number
+  pct_chg: number | null
+  volume: number | null
+  volume_unit: string | null       // A股=手，港股=股
+  amount: number | null
+  outer_volume: number | null      // 官方主动买入量（外盘）
+  inner_volume: number | null      // 官方主动卖出量（内盘）
+  outer_pct: number | null         // 主动买入占比 %
+  bids: number
+  asks: number
+  stale: boolean
+  net_amount: number | null
+  flow_source: string | null
+  fetched_at: number | null
+}
+
+export interface FlowBuckets {
+  [k: string]: {
+    buy_volume: number
+    sell_volume: number
+    buy_amount: number
+    sell_amount: number
+    ticks: number
+  }
+}
+
+export interface WatchFlow {
+  symbol: string
+  name: string
+  market: string
+  trade_date: number
+  unit: string
+  currency: string
+  last: number
+  pct_chg: number
+  volume: number
+  amount: number
+  outer_volume: number | null
+  inner_volume: number | null
+  outer_pct: number | null
+  tick_buy_volume: number
+  tick_sell_volume: number
+  tick_neutral_volume: number
+  buy_amount: number
+  sell_amount: number
+  net_amount: number
+  buckets: FlowBuckets
+  minutes: { dt: string; buy: number; sell: number; neutral: number }[]
+  side_map: Record<string, string>
+  calibrated: boolean
+  tick_vs_official_pct: number | null
+  flow_source: string
+  caveat: string
+  ticks_total: number
+  updated_at: number
+}
+
+export interface WatchStatus {
+  pool: string[]
+  pool_size: number
+  feeds: Record<string, { ready: boolean; connected: boolean }>
+  session: Record<string, WatchSession>
+  trading_day: Record<string, WatchSession>
+  server_time: string
+  last_refresh_at: number
+  last_error: string
+  stats: Record<string, number>
+  calibration: Record<string, Record<string, string>>
+  calibrated: boolean
+  flow_ready: boolean
+  poll_interval: number | null
+  note: string
+}
+
+export interface OrderLevel {
+  0: number
+  1: number
+}
+
+export interface WatchDetail {
+  symbol: string
+  board: string
+  session: WatchSession
+  snapshot: Record<string, unknown>
+  book: { bids: number[][]; asks: number[][] }
+  flow: WatchFlow
+  feeds: Record<string, { ready: boolean; connected: boolean }>
+  quote_extra?: Record<string, unknown>
+  quote_extra_error?: string
+  intraday?: { dt: string; price: number; avg_price: number; volume: number }[]
+  intraday_error?: string
+}
+
+export interface TickRow {
+  time: string
+  price: number
+  volume: number
+  deals: number
+  amount: number
+  direction: string
+  side_code: string
+}
+
+export interface TickPage {
+  rows: TickRow[]
+  total: number
+  side_map: Record<string, string>
+  calibrated?: boolean
+  error?: string
+}
+
+export interface KlineRow {
+  dt: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  amount: number
+}
+
+export interface KlineResult {
+  symbol: string
+  freq: string
+  adjust: string
+  source: string
+  unit: string
+  note: string
+  rows: KlineRow[]
+}
+
+export interface FlowHistoryRow {
+  id?: number | null
+  trade_date: number
+  symbol: string
+  name: string
+  market: string
+  close: number
+  pct_chg: number
+  volume: number
+  amount: number
+  outer_volume: number | null
+  inner_volume: number | null
+  tick_buy_volume: number
+  tick_sell_volume: number
+  tick_neutral_volume: number
+  buy_amount: number
+  sell_amount: number
+  big_buy_volume: number
+  big_sell_volume: number
+  side_map: string
+  flow_source: string
+  staled: boolean
+}
+
+export async function getWatchStatus(): Promise<WatchStatus> {
+  const r = await api.get<WatchStatus>('/watch/status', { timeout: 20000 })
+  return r.data
+}
+
+export interface WatchRefreshResult {
+  count: number
+  polled: boolean
+  skipped: boolean
+  reason: string
+  list: WatchRow[]
+  status: WatchStatus
+}
+
+/** 刷一整池。默认带服务端时段闸；force=true 时才绕过（手动点「立即刷新」用）。 */
+export async function refreshWatch(force = false): Promise<WatchRefreshResult> {
+  const r = await api.post<WatchRefreshResult>('/watch/refresh', {}, { params: { force }, timeout: 30000 })
+  return r.data
+}
+
+export async function getWatchList(): Promise<{ rows: WatchRow[]; status: WatchStatus }> {
+  const r = await api.get<{ rows: WatchRow[]; status: WatchStatus }>('/watch/list', { timeout: 20000 })
+  return r.data
+}
+
+export async function addWatchPool(symbols: string[]): Promise<{ added: { symbol: string; name: string; board: string }[]; errors: { symbol: string; error: string }[]; pool: string[] }> {
+  const r = await api.post('/watch/pool', { symbols }, { timeout: 30000 })
+  return r.data
+}
+
+export async function removeWatchPool(symbol: string): Promise<{ removed: boolean; symbol: string; pool: string[] }> {
+  const r = await api.delete<{ removed: boolean; symbol: string; pool: string[] }>('/watch/pool', { data: { symbol }, timeout: 20000 })
+  return r.data
+}
+
+export async function getWatchDetail(symbol: string): Promise<WatchDetail> {
+  const r = await api.get<WatchDetail>(`/watch/${encodeURIComponent(symbol)}`, { timeout: 60000 })
+  return r.data
+}
+
+export async function getWatchTicks(symbol: string, q: { limit?: number; offset?: number; side?: string } = {}): Promise<TickPage> {
+  const r = await api.get<TickPage>(`/watch/${encodeURIComponent(symbol)}/ticks`, { params: q, timeout: 60000 })
+  return r.data
+}
+
+export async function getWatchKline(symbol: string, q: { freq?: string; days?: number; adjust?: string } = {}): Promise<KlineResult> {
+  const r = await api.get<KlineResult>(`/watch/${encodeURIComponent(symbol)}/kline`, { params: q, timeout: 60000 })
+  return r.data
+}
+
+export async function getWatchHistory(q: { symbol?: string; trade_date?: number; limit?: number } = {}): Promise<{ rows: FlowHistoryRow[] }> {
+  const r = await api.get<{ rows: FlowHistoryRow[] }>('/watch/history', { params: q, timeout: 30000 })
+  return r.data
+}
+
+// ---------------- 新手指引（金融术语库）----------------
+
+export interface GuideCategory {
+  id: string
+  title: string
+  summary: string
+  count: number
+}
+
+export interface GuideTerm {
+  slug: string
+  term: string
+  aliases: string[]
+  category: string
+  level: string
+  one_liner: string
+  explain: string
+  example: string
+  pitfalls: string[]
+  where_to_see: string
+  related: string[]
+  related_terms?: { slug: string; term: string }[]
+}
+
+export async function getGuideCategories(): Promise<GuideCategory[]> {
+  const r = await api.get<GuideCategory[]>('/guide/categories')
+  return r.data
+}
+
+export async function getGuideTerms(q: { category?: string; q?: string } = {}): Promise<GuideTerm[]> {
+  const r = await api.get<GuideTerm[]>('/guide/terms', { params: q, timeout: 20000 })
+  return r.data
+}
+
+export async function getGuideTerm(slug: string): Promise<GuideTerm> {
+  const r = await api.get<GuideTerm>(`/guide/terms/${encodeURIComponent(slug)}`)
+  return r.data
+}

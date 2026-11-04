@@ -19,23 +19,28 @@ class RateLimiter:
         self.min_interval = float(min_interval)
         self.jitter = float(jitter)
         self._lock = threading.Lock()
-        self._next_t = 0.0
+        self._last_t: float | None = None      # 上一次"真正放行"的时刻
 
     def acquire(self) -> float:
-        """阻塞直到放行，返回排队等待秒数（不含抖动）。"""
+        """阻塞直到放行，返回排队等待秒数（不含抖动）。
+
+        整段持锁睡到点，并把间隔基准记成实际放行时刻。早先的写法在锁外睡觉、
+        并提前把下一班排到 `_next_t`，于是睡眠迟到（Windows 粒度约 15.6ms）那段
+        会被当成"已经等过了"：实测 min_interval=0.03 时相邻两次放行只隔 0.015s，
+        限速形同虚设——东财/腾讯这类公开接口会把本机直接打进冷却。
+        """
         with self._lock:
             now = time.monotonic()
-            wait = max(0.0, self._next_t - now)
-            self._next_t = max(now, self._next_t) + self.min_interval
-        if wait > 0:
-            # 睡眠可能被 OS 调度提前唤醒/延迟进入：循环补齐到目标时刻，
-            # 保证实际放行间隔不小于 min_interval（防限速器失效触发反爬）
-            target = time.monotonic() + wait
-            while True:
-                remaining = target - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(remaining)
-        if self.min_interval > 0 and self.jitter > 0:
-            time.sleep(self.min_interval * self.jitter * random.random())
-        return wait
+            wait = 0.0 if self._last_t is None else \
+                max(0.0, self._last_t + self.min_interval - now)
+            if wait > 0:
+                deadline = now + wait
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    time.sleep(remaining)
+            if self.min_interval > 0 and self.jitter > 0:
+                time.sleep(self.min_interval * self.jitter * random.random())
+            self._last_t = time.monotonic()
+            return wait

@@ -20,12 +20,14 @@ from quantdesk import __version__
 from quantdesk.api.routes_backtest import router as backtest_router
 from quantdesk.api.routes_channels import router as channels_router
 from quantdesk.api.routes_compliance import router as compliance_router
+from quantdesk.api.routes_guide import router as guide_router
 from quantdesk.api.routes_interop import router as interop_router
 from quantdesk.api.routes_market import router as market_router
 from quantdesk.api.routes_settings import router as settings_router
 from quantdesk.api.routes_strategy import router as strategy_router
 from quantdesk.api.routes_system import router as system_router
 from quantdesk.api.routes_trading import router as trading_router
+from quantdesk.api.routes_watch import router as watch_router
 from quantdesk.api.ws import router as ws_router
 from quantdesk.config import data_dir, get_settings
 from quantdesk.store.db import init_db
@@ -79,6 +81,8 @@ app.include_router(settings_router)
 app.include_router(compliance_router)
 app.include_router(channels_router)
 app.include_router(interop_router)
+app.include_router(watch_router)
+app.include_router(guide_router)
 app.include_router(system_router)
 app.include_router(ws_router)
 

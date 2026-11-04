@@ -1,5 +1,6 @@
 """D04：限速器测试（最小间隔 + 0 间隔直通）。"""
 
+import threading
 import time
 
 import pytest
@@ -17,6 +18,48 @@ def test_rate_limit_spacing():
     gaps = [b - a for a, b in zip(times, times[1:])]
     assert all(g >= 0.025 for g in gaps), gaps
     assert times[-1] - times[0] >= 0.085  # 3 个完整间隔（含容差）
+
+
+def test_spacing_is_not_eaten_by_late_wakeups():
+    """回归锁：睡眠迟到时，欠下的时间要往后顺延，不能被当成"已经等过了"。
+
+    旧实现在锁外睡觉、并提前排好下一班，Windows 15.6ms 粒度一迟到就会出现
+    min_interval=0.03 却只隔 0.015s 的放行——限速漏了，公开接口会把本机打进冷却。
+    """
+    n, step = 12, 0.02
+    rl = RateLimiter(min_interval=step, jitter=0.0)
+    times = []
+    for _ in range(n):
+        rl.acquire()
+        times.append(time.monotonic())
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert min(gaps) >= step - 0.003, [round(g, 4) for g in gaps]
+    assert times[-1] - times[0] >= (n - 1) * step - 0.005
+
+
+def test_concurrent_callers_stay_serialised():
+    """多线程一起抢：任意两次放行的间隔都不能小于 min_interval 的一半（并发测量有噪声，
+    这里要抓住的是"塌方式并发"——旧实现迟到唤醒时会一次放行好几个）。"""
+    step = 0.02
+    rl = RateLimiter(min_interval=step, jitter=0.0)
+    times: list[float] = []
+    lock = threading.Lock()
+
+    def worker():
+        for _ in range(4):
+            rl.acquire()
+            with lock:
+                times.append(time.monotonic())
+
+    ts = [threading.Thread(target=worker) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    ordered = sorted(times)
+    assert len(ordered) == 16
+    gaps = [b - a for a, b in zip(ordered, ordered[1:])]
+    assert min(gaps) >= step * 0.5, [round(g, 4) for g in gaps]
 
 
 def test_zero_interval_no_sleep():

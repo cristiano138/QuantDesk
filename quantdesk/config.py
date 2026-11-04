@@ -49,8 +49,17 @@ class Settings(BaseSettings):
 
     # —— 主流股票软件通道路由（逗号分隔注册名，靠前的先用；缺失/未就绪自动跳过）——
     feed_priority_history: str = "qmt_xtdata,tushare,akshare"
-    feed_priority_realtime: str = "qmt_xtdata,tdx_aidata"
+    # 实时主源：QMT/通达信缺席时落到腾讯公开行情（只读看盘主链路，本机实测可用）
+    feed_priority_realtime: str = "qmt_xtdata,tdx_aidata,tx_quote"
     feed_priority_financial: str = "ths_ifind,tushare,akshare"
+
+    # —— 盯盘（只读看盘：实时池、刷新节奏、收盘定格）——
+    # 注：tx_quote 不进 feed_priority_history —— 腾讯 K 线不返回成交额，
+    # 混进 A股历史降级链会静默写入 amount=0 的降级数据；港股历史由盯盘接口直取腾讯。
+    watch_enabled: bool = True
+    watch_poll_interval_s: float = 5.0          # 整池快照轮询间隔（一次请求覆盖全池）
+    watch_default_symbols: str = ("600000.SH,000001.SZ,600519.SH,300750.SZ,"
+                                 "00700.HK,09988.HK,03690.HK,01810.HK")
 
     # —— 通道韧性（宪法：断线可探测 + 重连后重放订阅/刷新对账）——
     watchdog_interval_s: float = 60.0    # 健康态探活间隔

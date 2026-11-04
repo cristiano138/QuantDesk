@@ -466,3 +466,50 @@ def reconcile_last_run(db_path=None) -> dict:
             ReconcileDiffRow.ran_at == ran_at)).all()
         return {"ran_at": ran_at, "channel": last.channel,
                 "diffs": sum(0 if r.kind == "clean" else 1 for r in rows)}
+def flow_upsert(row: dict, db_path=None) -> None:
+    """当日买卖量定格（按 trade_date+symbol 幂等覆盖——盯盘一天里反复定格不应堆重复行）。"""
+    from quantdesk.store.models_db import DailyFlowRow
+
+    with _write_lock, get_session(db_path) as s:
+        existing = s.exec(select(DailyFlowRow).where(
+            DailyFlowRow.trade_date == row["trade_date"],
+            DailyFlowRow.symbol == row["symbol"])).first()
+        target = existing or DailyFlowRow(trade_date=row["trade_date"], symbol=row["symbol"])
+        for k, v in row.items():
+            if k in ("trade_date", "symbol", "id"):
+                continue
+            if hasattr(target, k):
+                setattr(target, k, v)
+        s.add(target)
+        s.commit()
+
+
+def flow_latest(trade_date: int, db_path=None) -> list[dict]:
+    """某交易日全部标的的买卖量定格（盯盘复盘列表）。"""
+    from quantdesk.store.models_db import DailyFlowRow
+
+    with get_session(db_path) as s:
+        rows = s.exec(select(DailyFlowRow).where(DailyFlowRow.trade_date == trade_date)
+                      .order_by(DailyFlowRow.amount.desc())).all()
+        return [r.model_dump() for r in rows]
+
+
+def flow_history(symbol: str, limit: int = 60, db_path=None) -> list[dict]:
+    """单标的近 N 日的主动买卖结构（看资金是持续流入还是单日脉冲）。"""
+    from quantdesk.store.models_db import DailyFlowRow
+
+    with get_session(db_path) as s:
+        rows = s.exec(select(DailyFlowRow).where(DailyFlowRow.symbol == symbol)
+                      .order_by(DailyFlowRow.trade_date.desc())
+                      .limit(min(int(limit), 500))).all()
+        return [r.model_dump() for r in rows]
+
+
+def flow_dates(db_path=None, limit: int = 40) -> list[int]:
+    """已有定格记录的交易日（倒序），供"哪些天回看过"判断。"""
+    from quantdesk.store.models_db import DailyFlowRow
+
+    with get_session(db_path) as s:
+        rows = s.exec(select(DailyFlowRow.trade_date).distinct()
+                      .order_by(DailyFlowRow.trade_date.desc()).limit(limit)).all()
+        return [int(r[0] if isinstance(r, tuple) else r) for r in rows]

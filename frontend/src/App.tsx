@@ -13,8 +13,11 @@ import SettingsPage from './pages/SettingsPage'
 const MarketPage = React.lazy(() => import('./pages/MarketPage'))
 const StrategyPage = React.lazy(() => import('./pages/StrategyPage'))
 const BacktestPage = React.lazy(() => import('./pages/BacktestPage'))
+const WatchPage = React.lazy(() => import('./pages/WatchPage'))
+const GuidePage = React.lazy(() => import('./pages/GuidePage'))
 
 const NAV = [
+  { to: '/watch', label: '实时盯盘' },
   { to: '/market', label: '行情面板' },
   { to: '/strategy', label: '策略工作台' },
   { to: '/backtest', label: '回测报告' },
@@ -22,6 +25,7 @@ const NAV = [
   { to: '/channels', label: '通道' },
   { to: '/interop', label: '软件互操作' },
   { to: '/data', label: '数据管理' },
+  { to: '/guide', label: '新手指引' },
   { to: '/compliance', label: '报备清单' },
   { to: '/settings', label: '设置' },
 ]
@@ -114,6 +118,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<MarketPage />} />
             <Route path="/market" element={<MarketPage />} />
+            <Route path="/watch" element={<WatchPage />} />
+            <Route path="/guide" element={<GuidePage />} />
             <Route path="/strategy" element={<StrategyPage />} />
             <Route path="/backtest" element={<BacktestPage />} />
             <Route path="/monitor" element={<MonitorPage />} />

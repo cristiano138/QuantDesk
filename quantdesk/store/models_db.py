@@ -171,3 +171,37 @@ class LogRow(SQLModel, table=True):
     source: str = Field(default="", index=True)
     strategy_id: str = Field(default="", index=True)
     message: str = ""
+
+
+class DailyFlowRow(SQLModel, table=True):
+    """当日买卖量定格（盯盘页收盘后仍可回看历史某天的主动买卖结构）。
+
+    为什么要落库：盯盘的实时买卖量只活在内存里，收盘后刷新页面就变成"今天没数据"；
+    而"某天主买占比 62%、尾盘大单流出"这类看盘结论必须能复盘。
+    口径列全部保留：官方内外盘与逐笔聚合各自留痕，谁和谁差多少一目了然，不做合并掩盖。
+    """
+
+    __tablename__ = "daily_flow"
+
+    id: int | None = Field(default=None, primary_key=True)
+    trade_date: int = Field(index=True)          # YYYYMMDD 整数，便于按日查
+    symbol: str = Field(index=True)
+    name: str = ""
+    market: str = ""                             # SH/SZ/BJ/HK
+    close: float = 0.0
+    pct_chg: float = 0.0
+    volume: float = 0.0                          # A股=手，港股=股（volume_unit 标注）
+    amount: float = 0.0
+    outer_volume: float | None = None            # 官方主动买入量（外盘）
+    inner_volume: float | None = None            # 官方主动卖出量（内盘）
+    tick_buy_volume: float = 0.0                 # 逐笔聚合的买量（含盘后，与官方可有差）
+    tick_sell_volume: float = 0.0
+    tick_neutral_volume: float = 0.0
+    buy_amount: float = 0.0
+    sell_amount: float = 0.0
+    big_buy_volume: float = 0.0                  # 大单分层（阈值见 services/watch.py）
+    big_sell_volume: float = 0.0
+    side_map: str = ""                           # 校准后的方向映射，如 {"2":"buy","1":"sell"}
+    flow_source: str = ""                        # official_outer_inner / em_tick
+    staled: bool = False                         # 定格时数据是否已过时（接口断过）
+    created_at: int = Field(default_factory=now_ms)

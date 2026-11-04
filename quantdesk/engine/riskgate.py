@@ -27,7 +27,7 @@ from quantdesk.core.enums import AdjustType, Frequency, OrderStatus, OrderType, 
 from quantdesk.core.errors import ConnectionLostError
 from quantdesk.core.events import Event, EventType, EventBus
 from quantdesk.core.models import Order
-from quantdesk.core.symbols import board_of, is_st
+from quantdesk.core.symbols import board_of, is_hk, is_st
 from quantdesk.core.timeutil import now_ms
 from quantdesk.engine.matching import FeeCalculator
 from quantdesk.store import repo
@@ -127,6 +127,10 @@ class RiskGate:
         if not getattr(o, "order_id", ""):
             o = _replace(o, order_id=self.new_order_id())
 
+        # 只读产品红线：港股仅供看盘，下单意图在咽喉处直接拒掉（不进任何通道）
+        if is_hk(o.symbol):
+            return self._reject(o, f"{o.symbol} 为港股——本工作台港股只读看盘，未开通交易通道")
+
         sim = self._sim_only()
         broker = self.paper if sim else self._resolve_live()
         if broker is None:
@@ -176,6 +180,8 @@ class RiskGate:
             board = board_of(order.symbol)
         except Exception as e:                         # noqa: BLE001
             return [f"非法证券代码: {order.symbol}（{e}）"]
+        if is_hk(order.symbol):                        # 绕过 submit 直连 validate 也要拦
+            return [f"{order.symbol} 为港股——港股只读看盘，交易通道未开通"]
         if order.volume <= 0:
             v.append(f"委托数量必须 > 0（当前 {order.volume}）")
             return v                                   # 后续检查无意义

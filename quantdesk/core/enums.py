@@ -69,3 +69,4 @@ class Board(str, Enum):
     GEM = "gem"      # 创业板
     STAR = "star"    # 科创板
     BSE = "bse"      # 北交所
+    HK = "hk"        # 港股（本项目只读：无涨跌停/T+1/整手概念，不得进入下单路径）

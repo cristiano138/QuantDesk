@@ -70,10 +70,14 @@ def test_meta_of_reads_class_declared_metadata_with_defaults():
 
 
 def test_requires_any_semantics():
-    """通达信这类「双传输层择一」通道：装了一条路就不能报 unready。"""
+    """通达信这类「双传输层择一」通道：装了一条路就不能报 unready。
+
+    用例不许依赖本机装了哪些 SDK（pytdx 装上之后老断言"两个都没装"直接失真），
+    所以这里用虚构模块名把语义本身钉住，注入 sys.modules 来演"其中一条通了"。
+    """
     class OneWay:
         name = "tdx_aidata"
-        requires = ("TdxAiData", "pytdx")
+        requires = ("NoSuchTdxOfficialSdk", "NoSuchTdxOpenSdk")
         requires_any = True
 
     class AllWay:
@@ -82,20 +86,20 @@ def test_requires_any_semantics():
 
     any_meta = meta_of(OneWay, kind="data")
     all_meta = meta_of(AllWay, kind="data")
-    assert any_meta.deps_ready() is False                  # 两个都没装
-    assert any_meta.missing_deps() == ["TdxAiData", "pytdx"]
+    assert any_meta.deps_ready() is False                  # 两条路都不通
+    assert any_meta.missing_deps() == ["NoSuchTdxOfficialSdk", "NoSuchTdxOpenSdk"]
     assert all_meta.deps_ready() is False
     assert all_meta.missing_deps() == ["no_such_module_xyz"]
 
     import sys
     import types
 
-    sys.modules["pytdx"] = types.ModuleType("pytdx")
+    sys.modules["NoSuchTdxOpenSdk"] = types.ModuleType("NoSuchTdxOpenSdk")
     try:
         assert any_meta.deps_ready() is True               # 任一条路通即就绪
         assert any_meta.missing_deps() == []               # 不再列另一条路
     finally:
-        sys.modules.pop("pytdx", None)
+        sys.modules.pop("NoSuchTdxOpenSdk", None)
 
 
 def test_builtin_adapters_describe_with_capabilities():
