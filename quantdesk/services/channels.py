@@ -46,6 +46,7 @@ _CREDENTIALS: dict[str, list[tuple[str, str, bool]]] = {
 
 _PAPER_CHANNEL = "paper"
 _RETRY_COOLDOWN_S = 15.0          # 装配失败后的重试冷却（避免每单都去撞一次连接）
+_FEED_RETRY_COOLDOWN_S = 60.0     # 行情通道同上：冷却期内不外呼、不刷日志
 
 # 行情通道的凭据（交易通道见 _CREDENTIALS）：feed 的 connect() 无参，凭据由适配器
 # 自己经 core.secrets.resolve() 取，这里只登记「UI 该问用户要什么」。
@@ -106,6 +107,7 @@ class ChannelHub:
         self.db_path = db_path
         self._feeds: dict[str, DataFeedAdapter] = {}
         self._feed_errors: dict[str, str] = {}
+        self._feed_retry_at: dict[str, float] = {}   # 装配失败后的重试冷却（monotonic 截止点）
         self._fed = None                          # FederatedFeed 单例（持有订阅引用计数）
         self._broker: BrokerAdapter | None = None
         self._broker_channel: str = ""
@@ -126,11 +128,17 @@ class ChannelHub:
         return [x.strip() for x in (csv or "").split(",") if x.strip()]
 
     # ---------- 行情通道 ----------
-    def feed(self, name: str) -> DataFeedAdapter | None:
-        """取（并按需连接）一个行情通道；不可用返回 None，原因记在 feed_errors()。"""
+    def feed(self, name: str, *, force: bool = False) -> DataFeedAdapter | None:
+        """取（并按需连接）一个行情通道；不可用返回 None，原因记在 feed_errors()。
+
+        装配失败后进入冷却（force=True 可跳过，供面板「测试连接」用）：否则每次外呼都重新
+        实例化 + connect 一遍失败的 SDK，既刷满日志，也可能撞上服务端限流。
+        """
         with self._lock:
             if name in self._feeds:
                 return self._feeds[name]
+            if not force and time.monotonic() < self._feed_retry_at.get(name, 0.0):
+                return None
             try:
                 cls = get_adapter_class(name)
             except KeyError:
@@ -144,10 +152,13 @@ class ChannelHub:
                 inst.connect()
             except (AdapterError, ConfigError, TypeError) as e:
                 self._feed_errors[name] = f"{e.__class__.__name__}: {e}"
-                log.warning("行情通道装配失败 %s: %s", name, e)
+                self._feed_retry_at[name] = time.monotonic() + _FEED_RETRY_COOLDOWN_S
+                log.warning("行情通道装配失败 %s: %s（%.0fs 内不再重试，显式探活可绕过）",
+                            name, e, _FEED_RETRY_COOLDOWN_S)
                 return None
             self._feeds[name] = inst
             self._feed_errors.pop(name, None)
+            self._feed_retry_at.pop(name, None)
             log.info("行情通道已接入: %s", name)
             return inst
 
@@ -218,8 +229,11 @@ class ChannelHub:
             return self._fed
 
     # ---------- 交易通道 ----------
-    def live_broker(self) -> BrokerAdapter | None:
-        """当前实盘通道（模拟盘开关 ON 时不会被调用；解析失败返回 None → RiskGate 拒单）。"""
+    def live_broker(self, *, force: bool = False) -> BrokerAdapter | None:
+        """当前实盘通道（模拟盘开关 ON 时不会被调用；解析失败返回 None → RiskGate 拒单）。
+
+        force=True 只在面板「测试连接」用——跳过冷却做一次真实尝试；下单路径必须留冷却。
+        """
         channel = str(getattr(self._cfg(), "broker_channel", _PAPER_CHANNEL)) or _PAPER_CHANNEL
         with self._lock:
             if channel == _PAPER_CHANNEL:
@@ -227,7 +241,7 @@ class ChannelHub:
                 return None
             if self._broker is not None and self._broker_channel == channel:
                 return self._broker
-            if time.monotonic() < self._next_retry_at:
+            if not force and time.monotonic() < self._next_retry_at:
                 return None                      # 冷却期内不反复撞连接
             try:
                 cls = get_adapter_class(channel)

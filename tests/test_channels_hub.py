@@ -189,6 +189,35 @@ def test_feed_instances_are_reused_not_rebuilt(stub_registry, monkeypatch):
     hub.stop()
 
 
+def test_unreachable_feed_is_cooldown_not_reconnected_every_request(stub_registry, monkeypatch):
+    """连不上的源每次都重连 = 日志刷满 + 撞对端限流；冷却期只留原因，显式探活才重试。"""
+    attempts: list[int] = []
+
+    class CountingBad(BadFeed):
+        def connect(self) -> None:
+            attempts.append(1)
+            raise ConnectionLostError("miniQMT 未登录")
+
+    monkeypatch.setitem(reg._ALL, "hist_b", CountingBad)
+    hub = _hub(_Clock(), monkeypatch)
+    assert hub.feed("hist_b") is None
+    assert len(attempts) == 1
+    for _ in range(5):                                   # 页面轮询/多次外呼
+        assert hub.feed("hist_b") is None
+    assert len(attempts) == 1                            # 冷却期内不再重连
+    assert "miniQMT" in hub.feed_errors()["hist_b"]      # 原因仍然如实可查
+    assert hub.feed("hist_b", force=True) is None        # 用户点「测试连接」→ 真试一次
+    assert len(attempts) == 2
+    hub.stop()
+
+
+def test_history_chain_uses_cooldown_and_keeps_ready_source(stub_registry, monkeypatch):
+    hub = _hub(_Clock(), monkeypatch)
+    assert hub.history_chain() == ["hist_a"]
+    assert hub.history_chain() == ["hist_a"]             # 第二次不因坏源重连而变慢
+    hub.stop()
+
+
 def test_realtime_feed_picks_first_source_with_realtime_capability(
         stub_registry, monkeypatch):
     hub = _hub(_Clock(), monkeypatch)

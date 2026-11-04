@@ -39,9 +39,9 @@ def probe(name: str) -> dict:
     """显式探活（用户在通道页点「测试连接」才走这里，面板刷新不外呼）。"""
     hub = get_hub()
     started = time.perf_counter()
-    inst = hub.feed(name)
+    inst = hub.feed(name, force=True)
     if inst is None and name == hub._cfg().broker_channel:    # noqa: SLF001 — 面板需要如实原因
-        broker = hub.live_broker()
+        broker = hub.live_broker(force=True)
         if broker is None:
             raise HTTPException(status_code=503, detail=hub.status()["live_error"])
         inst = broker
