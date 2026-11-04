@@ -136,3 +136,21 @@ class AccountStateRow(SQLModel, table=True):
     cash: float = 0.0
     initial_cash: float = 0.0
     updated_at: int = Field(default_factory=now_ms)
+
+
+class ReconcileDiffRow(SQLModel, table=True):
+    """对账差异（七表外新增本地表）。
+
+    理由：「差异即事故」要求事故可回溯——只发 WS 事件的话，页面关掉就再没人知道
+    昨晚少了一笔成交。差异按轮次记录，前端红条与运维导出都读这张表。
+    """
+
+    __tablename__ = "reconcile_diff"
+
+    id: int | None = Field(default=None, primary_key=True)
+    ran_at: int = Field(index=True)
+    channel: str = Field(index=True)
+    kind: str = Field(index=True)
+    ref: str = ""
+    detail_json: str = "{}"
+    created_at: int = Field(default_factory=now_ms)

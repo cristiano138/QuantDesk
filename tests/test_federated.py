@@ -117,11 +117,12 @@ def test_financial_degradation_chain():
 
 
 def test_realtime_guard():
+    """无实时主源时订阅抛引导错；退订是幂等清理（策略停止路径不能因为没源就炸）。"""
     fed = FederatedFeed([DummyFeed(df=_df())])
     with pytest.raises(FeedCapabilityError):
         fed.subscribe_realtime(["600000.SH"], lambda e: None)
-    with pytest.raises(FeedCapabilityError):
-        fed.unsubscribe_realtime(["600000.SH"])
+    fed.unsubscribe_realtime(["600000.SH"])             # 不抛，无副作用
+    assert fed.active_symbols() == []
 
 
 def test_capabilities_union():

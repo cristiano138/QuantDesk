@@ -11,7 +11,6 @@ from pathlib import Path
 from sqlalchemy import event as sa_event
 from sqlmodel import Session, SQLModel, create_engine
 
-from quantdesk.config import data_dir
 from quantdesk.core.timeutil import now_ms
 
 log = logging.getLogger(__name__)
@@ -39,6 +38,13 @@ def _make_engine(path: Path):
 
 
 def default_db_path() -> Path:
+    """默认库路径。
+
+    惰性取 data_dir()：模块导入期绑死函数引用会让「运行时改目录」（测试隔离、
+    便携模式）失效——实测踩过：测试夹具改了 data_dir，写入仍落到开发库。
+    """
+    from quantdesk.config import data_dir
+
     return data_dir() / "quantdesk.db"
 
 

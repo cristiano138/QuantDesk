@@ -311,3 +311,57 @@ def account_set(cash: float, initial_cash: float, db_path=None) -> None:
             row.initial_cash = initial_cash
         row.updated_at = now_ms()
         s.commit()
+
+
+# ---------- 对账差异（差异即事故，必须可回溯） ----------
+def reconcile_record(diffs: list[dict], channel: str = "", ran_at: int | None = None,
+                     db_path=None) -> int:
+    """一轮对账的差异整体落库（空差异也记一轮：无差异同样是审计证据）。"""
+    from quantdesk.store.models_db import ReconcileDiffRow
+
+    ts = ran_at if ran_at is not None else now_ms()
+    with _write_lock, get_session(db_path) as s:
+        if not diffs:
+            s.add(ReconcileDiffRow(ran_at=ts, channel=channel, kind="clean", ref="",
+                                   detail_json="{}"))
+        for d in diffs:
+            s.add(ReconcileDiffRow(ran_at=ts, channel=channel, kind=d["kind"],
+                                   ref=str(d.get("ref", "")),
+                                   detail_json=json.dumps(d.get("detail", {}),
+                                                          ensure_ascii=False)))
+        s.commit()
+    return len(diffs)
+
+
+def reconcile_recent(limit: int = 100, kind: str | None = None,
+                     db_path=None) -> list[dict]:
+    from quantdesk.store.models_db import ReconcileDiffRow
+
+    with get_session(db_path) as s:
+        stmt = select(ReconcileDiffRow)
+        if kind:
+            stmt = stmt.where(ReconcileDiffRow.kind == kind)
+        rows = s.exec(stmt.order_by(ReconcileDiffRow.ran_at.desc(),
+                                    ReconcileDiffRow.id.desc()).limit(limit)).all()
+        out = []
+        for r in rows:
+            out.append({"id": r.id, "ran_at": r.ran_at, "channel": r.channel,
+                        "kind": r.kind, "ref": r.ref,
+                        "detail": json.loads(r.detail_json or "{}")})
+        return out
+
+
+def reconcile_last_run(db_path=None) -> dict:
+    """最近一轮对账概览（供面板显示「上次核对：时间 / 通道 / 差异数」）。"""
+    from quantdesk.store.models_db import ReconcileDiffRow
+
+    with get_session(db_path) as s:
+        last = s.exec(select(ReconcileDiffRow).order_by(
+            ReconcileDiffRow.ran_at.desc()).limit(1)).first()
+        if last is None:
+            return {"ran_at": None, "channel": "", "diffs": 0}
+        ran_at = last.ran_at
+        rows = s.exec(select(ReconcileDiffRow).where(
+            ReconcileDiffRow.ran_at == ran_at)).all()
+        return {"ran_at": ran_at, "channel": last.channel,
+                "diffs": sum(0 if r.kind == "clean" else 1 for r in rows)}

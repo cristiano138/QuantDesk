@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     akshare_min_interval: float = 1.0   # AKShare 反爬约 1 req/s
     tushare_min_interval: float = 0.35  # 按积分档限速（200 次/分钟档）
 
+    # —— iFinD（付费源；凭据优先走 DPAPI 保险库，这里只是 env/开发注入位）——
+    ifind_refresh_token: str = ""
+    ifind_username: str = ""
+    ifind_password: str = ""
+    ifind_daily_quota: int = 3000       # 当日调用阈值：超阈值只读缓存，不再消耗配额
+    ifind_min_interval: float = 0.2
+
     # —— 主流股票软件通道路由（逗号分隔注册名，靠前的先用；缺失/未就绪自动跳过）——
     feed_priority_history: str = "qmt_xtdata,tushare,akshare"
     feed_priority_realtime: str = "qmt_xtdata,tdx_aidata"

@@ -7,6 +7,7 @@ from quantdesk.app import app
 from quantdesk.config import get_settings, reset_settings_overrides, update_settings
 from quantdesk.core.events import EventBus
 from quantdesk.engine.riskgate import RiskGate
+from quantdesk.services.settings_svc import RISK_CONFIRM_PHRASE as RISK_PHRASE
 from quantdesk.services.settings_svc import apply_settings
 
 
@@ -30,15 +31,44 @@ def test_update_persists_and_broadcasts():
     events = []
     bus = EventBus()
     bus.subscribe("settings", lambda e: events.append(e.data))
-    out = apply_settings({"simulation_only": False}, bus=bus)
+    out = apply_settings({"simulation_only": False}, bus=bus, confirm=RISK_PHRASE)
     assert out["simulation_only"] is False
     # 持久化：新读（缓存已失效）仍为 False
     assert get_settings().simulation_only is False
     assert events and events[0]["simulation_only"] is False
-    # 切回
+    # 切回模拟盘是「更安全方向」，不需要确认文本
     out2 = apply_settings({"simulation_only": True}, bus=bus)
     assert out2["simulation_only"] is True
     assert get_settings().simulation_only is True
+
+
+def test_switching_to_live_requires_server_side_confirmation():
+    """宪法第 2 条：确认文本在服务端校验，前端输入框只是交互载体。
+
+    此前只有 SettingsPage 判这句话，curl 直连 PUT /api/settings 就能切实盘——
+    这条用例锁死这个缺口。
+    """
+    with pytest.raises(ValueError, match="确认文本"):
+        apply_settings({"simulation_only": False})
+    with pytest.raises(ValueError, match="确认文本"):
+        apply_settings({"simulation_only": False}, confirm="我随便写的")
+    with pytest.raises(ValueError, match="确认文本"):
+        apply_settings({"enable_easytrader": True})
+    assert get_settings().simulation_only is True          # 没确认就切不动
+    assert get_settings().enable_easytrader is False
+
+
+def test_enable_easytrader_gated_then_visible():
+    """非官方通道：确认文本启用后才进交易 API 视野（宪法第 9 条）。"""
+    from quantdesk.adapters import get_adapter_class, list_adapters
+
+    assert "easytrader" not in list_adapters()
+    with pytest.raises(KeyError):
+        get_adapter_class("easytrader")
+    apply_settings({"enable_easytrader": True}, confirm=RISK_PHRASE)
+    assert "easytrader" in list_adapters()
+    apply_settings({"enable_easytrader": False})           # 关闭不需要确认
+    assert "easytrader" not in list_adapters()
 
 
 def test_invalid_values_rejected():
@@ -86,7 +116,11 @@ def test_api_settings_roundtrip(monkeypatch):
     with TestClient(app) as client:
         r = client.get("/api/settings")
         assert r.status_code == 200 and r.json()["simulation_only"] is True
-        r2 = client.put("/api/settings", json={"simulation_only": False})
+        # 直连 API 想切实盘：没有确认文本一律 400（服务端强制，不依赖前端弹窗）
+        assert client.put("/api/settings", json={"simulation_only": False}).status_code == 400
+        assert client.get("/api/settings").json()["simulation_only"] is True
+        r2 = client.put("/api/settings",
+                        json={"simulation_only": False, "confirm": RISK_PHRASE})
         assert r2.status_code == 200 and r2.json()["simulation_only"] is False
         assert client.get("/api/settings").json()["simulation_only"] is False
         assert client.put("/api/settings", json={"commission_rate": -1}).status_code == 400
