@@ -56,12 +56,13 @@ class MarketDataService:
             self._last_pub[tick.symbol] = now
         self._publish(tick)
 
-    def snapshot(self, symbol: str | None = None) -> dict | list:
+    def snapshot(self, symbol: str | None = None) -> dict | list | None:
         with self._lock:
             if symbol is None:
                 return [self._tick_json(t) for s, t in sorted(self._latest.items())]
             t = self._latest.get(symbol)
-        return self._tick_json(t) if t else {}
+        # 无行情返回 None（JSON null）——空对象会让前端把"无数据"误判为有效快照
+        return self._tick_json(t) if t else None
 
     # ---------- 自选股 ----------
     def watchlist(self) -> list[dict]:

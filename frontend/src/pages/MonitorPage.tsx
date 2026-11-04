@@ -76,7 +76,7 @@ export default function MonitorPage() {
   const positions = usePoll<PositionRow[]>(
     () => api.get<PositionRow[]>('/trading/positions').then((r) => r.data), 2000)
   const account = usePoll<AccountRow>(
-    () => api.get<AccountRow[]>('/trading/account').then((r) => r.data[0] ?? r.data), 2000)
+    () => api.get<AccountRow>('/trading/account').then((r) => r.data), 2000)
   const trades = usePoll<TradeRow[]>(
     () => api.get<TradeRow[]>('/trading/trades').then((r) => r.data), 3000)
 

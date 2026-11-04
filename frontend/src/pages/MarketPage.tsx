@@ -230,10 +230,13 @@ export default function MarketPage() {
     getFreqs(symbol).then(setFreqs).catch(() => setFreqs([]))
   }, [symbol, freq, loadBars])
 
-  // 快照轮询（1s；实时源接入后可切 WS）
+  // 快照轮询（1s；实时源接入后可切 WS）。后端无行情返回 null。
   useEffect(() => {
     if (!symbol) return
-    const load = () => getSnapshot(symbol).then(setTick).catch(() => setTick(null))
+    const load = () =>
+      getSnapshot(symbol)
+        .then((tk) => setTick(tk && tk.last != null ? tk : null))
+        .catch(() => setTick(null))
     load()
     const t = setInterval(load, 1000)
     return () => clearInterval(t)
@@ -288,7 +291,9 @@ export default function MarketPage() {
           <div className="card">
             <div className="market-head">
               <b>{symbol}</b>
-              {tick && <span className="badge">最新 {tick.last.toFixed(2)}</span>}
+              {tick && tick.last != null && (
+                <span className="badge">最新 {tick.last.toFixed(2)}</span>
+              )}
               {last && <span className="badge">收盘 {last.close.toFixed(2)}</span>}
               <span className="freq-tabs">
                 {(['kline', 'intraday'] as const).map((t) => (

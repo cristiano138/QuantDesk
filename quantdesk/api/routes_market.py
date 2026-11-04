@@ -36,8 +36,8 @@ def freqs(symbol: str) -> list[str]:
 
 
 @router.get("/snapshot")
-def snapshot(symbol: str | None = None) -> dict | list:
-    """最新 tick 快照（五档盘口数据源；实时源接入前为空）。"""
+def snapshot(symbol: str | None = None) -> dict | list | None:
+    """最新 tick 快照（五档盘口数据源；实时源接入前为 null——前端据此判空）。"""
     return get_market_service().snapshot(symbol)
 
 
