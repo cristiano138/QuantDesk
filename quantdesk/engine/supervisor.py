@@ -15,7 +15,6 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from quantdesk.config import data_dir
 from quantdesk.core.events import Event, EventType, EventBus
 from quantdesk.engine.runner import spawn_strategy_process
 from quantdesk.ipc.bridge import BridgeMain
@@ -228,6 +227,8 @@ class StrategySupervisor:
     def _dump_crash_log(self, reason: str) -> None:
         """崩溃前最后 10 条日志落盘。"""
         try:
+            from quantdesk.config import data_dir      # 调用时取，测试夹具改目录才生效
+
             d = data_dir() / "logs"
             d.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")

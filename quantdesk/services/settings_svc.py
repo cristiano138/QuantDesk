@@ -37,6 +37,10 @@ EDITABLE_FIELDS: dict[str, type] = {
     "ths_install_dir": str,
     # —— 非官方通道启用位（需确认文本）——
     "enable_easytrader": bool,
+    # —— 通道路由优先级（逗号分隔注册名；用户选主源/降级链的地方，不写死在代码里）——
+    "feed_priority_history": str,
+    "feed_priority_realtime": str,
+    "feed_priority_financial": str,
 }
 
 # 需要确认文本才能打开的危险开关 → 语义说明（供 UI 展示影响清单）
@@ -78,7 +82,29 @@ def _validate(k: str, v):
     sv = str(v)
     if k == "broker_channel":
         _validate_channel(sv)
+    if k.startswith("feed_priority_"):
+        _validate_feed_chain(k, sv)
     return sv
+
+
+def _validate_feed_chain(key: str, value: str) -> None:
+    """路由优先级串：每个名字都得是注册表里真实存在的**行情**通道。
+
+    允许尚未就绪（SDK 还没装）——用户经常是先在界面里配好主源，再去装客户端；
+    但不允许写错名或把交易通道名塞进来，那会让降级链静默少一环、排障时找不到原因。
+    """
+    from quantdesk.adapters import describe_adapters
+
+    names = [x.strip() for x in (value or "").split(",") if x.strip()]
+    if not names:
+        raise ValueError(f"{key} 不能为空（至少保留一个可用源，否则整条链无行情）")
+    data_names = {r["name"] for r in describe_adapters(include_disabled=False)
+                  if r["kind"] == "data"}
+    unknown = [n for n in names if n not in data_names]
+    if unknown:
+        raise ValueError(
+            f"{key} 含未知或不可用的行情通道: {unknown}（可选: {sorted(data_names)}；"
+            "默认禁用/未安装的通道需先在「通道」页启用与接入）")
 
 
 def _validate_channel(value: str) -> None:

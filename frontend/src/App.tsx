@@ -1,20 +1,26 @@
-import { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { api, getHealth, openEvents, type Health } from './api/client'
 import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
-import BacktestPage from './pages/BacktestPage'
+import ChannelsPage from './pages/ChannelsPage'
 import CompliancePage from './pages/CompliancePage'
 import DataPage from './pages/DataPage'
-import MarketPage from './pages/MarketPage'
+import InteropPage from './pages/InteropPage'
 import MonitorPage from './pages/MonitorPage'
 import SettingsPage from './pages/SettingsPage'
-import StrategyPage from './pages/StrategyPage'
+
+// 首屏不拉 Monaco 与图表库：这三页按需分包（宪法第 8 条栈纪律不变，只是切 chunk）
+const MarketPage = React.lazy(() => import('./pages/MarketPage'))
+const StrategyPage = React.lazy(() => import('./pages/StrategyPage'))
+const BacktestPage = React.lazy(() => import('./pages/BacktestPage'))
 
 const NAV = [
   { to: '/market', label: '行情面板' },
   { to: '/strategy', label: '策略工作台' },
   { to: '/backtest', label: '回测报告' },
   { to: '/monitor', label: '实盘监控' },
+  { to: '/channels', label: '通道' },
+  { to: '/interop', label: '软件互操作' },
   { to: '/data', label: '数据管理' },
   { to: '/compliance', label: '报备清单' },
   { to: '/settings', label: '设置' },
@@ -104,16 +110,20 @@ export default function App() {
         <header>
           <HealthBadge />
         </header>
-        <Routes>
-          <Route path="/" element={<MarketPage />} />
-          <Route path="/market" element={<MarketPage />} />
-          <Route path="/strategy" element={<StrategyPage />} />
-          <Route path="/backtest" element={<BacktestPage />} />
-          <Route path="/monitor" element={<MonitorPage />} />
-          <Route path="/data" element={<DataPage />} />
-          <Route path="/compliance" element={<CompliancePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-        </Routes>
+        <React.Suspense fallback={<section><p className="placeholder">页面加载中…</p></section>}>
+          <Routes>
+            <Route path="/" element={<MarketPage />} />
+            <Route path="/market" element={<MarketPage />} />
+            <Route path="/strategy" element={<StrategyPage />} />
+            <Route path="/backtest" element={<BacktestPage />} />
+            <Route path="/monitor" element={<MonitorPage />} />
+            <Route path="/channels" element={<ChannelsPage />} />
+            <Route path="/interop" element={<InteropPage />} />
+            <Route path="/data" element={<DataPage />} />
+            <Route path="/compliance" element={<CompliancePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+        </React.Suspense>
       </main>
       <ConfirmDialog request={confirmReq} onDone={onConfirmDone} />
     </div>

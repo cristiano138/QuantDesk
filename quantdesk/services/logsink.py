@@ -141,6 +141,9 @@ class LogSink:
     def query(self, **kw) -> dict:
         return repo.logs_query(db_path=self.db_path, **kw)
 
+    def sources(self) -> list[dict]:
+        return repo.logs_sources(db_path=self.db_path)
+
     def purge_before(self, ts_ms: int) -> int:
         return repo.logs_purge(ts_ms, db_path=self.db_path)
 

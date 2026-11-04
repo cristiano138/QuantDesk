@@ -12,6 +12,12 @@ function StatusDot({ ok }: { ok: boolean }) {
   return <span className={ok ? 'lamp lamp-paper' : 'lamp lamp-down'} />
 }
 
+const STATUS_CN: Record<string, string> = {
+  ready: '就绪',
+  unready: '未就绪',
+  disabled: '已禁用',
+}
+
 /** 运维面板（D28）：适配器健康灯 + 日志清单。挂在数据管理页下方。 */
 function OpsPanel() {
   const [health, setHealth] = useState<AdaptersHealth | null>(null)
@@ -31,6 +37,14 @@ function OpsPanel() {
   if (err) return <p className="badge badge-down">{err}</p>
   if (!health) return <p className="placeholder">加载中…</p>
 
+  // 服务端只给一列 channels（含 kind），这里按数据源/交易通道并排展示，行数取两者较多的一边
+  const feeds = (health.channels ?? []).filter((c) => c.kind === 'data')
+  const brokers = (health.channels ?? []).filter((c) => c.kind === 'broker')
+  const rows = Array.from({ length: Math.max(feeds.length, brokers.length) }, (_, i) => ({
+    feed: feeds[i],
+    broker: brokers[i],
+  }))
+
   return (
     <div className="card">
       <h3>适配器健康面板</h3>
@@ -42,16 +56,29 @@ function OpsPanel() {
           <tr><th>数据源</th><th>状态</th><th>交易通道</th><th>状态</th></tr>
         </thead>
         <tbody>
-          {health.feeds.map((f, i) => (
-            <tr key={f.name}>
-              <td>{f.name}</td>
-              <td><StatusDot ok={f.registered} />{f.status}</td>
-              <td>{health.brokers[i]?.name ?? ''}</td>
+          {rows.map((r, i) => (
+            <tr key={`${r.feed?.name ?? 'none'}-${r.broker?.name ?? i}`}>
+              <td>{r.feed ? r.feed.label : ''}</td>
               <td>
-                {health.brokers[i] && (
+                {r.feed && (
                   <>
-                    <StatusDot ok={health.brokers[i].registered} />
-                    {health.brokers[i].status}
+                    <StatusDot ok={r.feed.status === 'ready'} />
+                    {STATUS_CN[r.feed.status] ?? r.feed.status}
+                    {r.feed.missing.length > 0 && (
+                      <span className="sub-note">（缺 {r.feed.missing.join('、')}）</span>
+                    )}
+                  </>
+                )}
+              </td>
+              <td>{r.broker ? r.broker.label : ''}</td>
+              <td>
+                {r.broker && (
+                  <>
+                    <StatusDot ok={r.broker.status === 'ready'} />
+                    {STATUS_CN[r.broker.status] ?? r.broker.status}
+                    {r.broker.official === false && (
+                      <span className="dialog-red">非官方接口，稳定性低</span>
+                    )}
                   </>
                 )}
               </td>

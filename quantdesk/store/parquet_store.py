@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from quantdesk.config import data_dir
 from quantdesk.core.enums import AdjustType, Frequency
 
 log = logging.getLogger(__name__)
@@ -33,6 +32,10 @@ class SchemaError(ValueError):
 
 class ParquetStore:
     def __init__(self, root: str | Path | None = None):
+        # 调用时才取 data_dir：模块级绑定会把「当时的」函数对象焊死，
+        # 测试夹具改 quantdesk.config.data_dir 就失效——曾因此把合成行情写进真实开发库。
+        from quantdesk.config import data_dir
+
         self.root = Path(root) if root is not None else data_dir() / "parquet"
         self.root.mkdir(parents=True, exist_ok=True)
 

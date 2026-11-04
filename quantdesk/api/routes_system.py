@@ -75,3 +75,11 @@ def logs_stats() -> dict:
     from quantdesk.services.logsink import get_log_sink
 
     return get_log_sink().stats()
+
+
+@router.get("/logs/sources")
+def logs_sources() -> list[dict]:
+    """已有日志的来源与条数（历史日志页「来源」下拉的事实源）。"""
+    from quantdesk.services.logsink import get_log_sink
+
+    return get_log_sink().sources()

@@ -599,3 +599,232 @@ section h2 {
   line-height: 1.9;
   padding-left: 20px;
 }
+
+/* ---------- 通道页 / 互操作页 / 回测异步 ---------- */
+.lamp-ready {
+  background: #16a34a;
+}
+
+.lamp-unready {
+  background: #d97706;
+}
+
+.lamp-disabled {
+  background: #9ca3af;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  margin: 0 4px 4px 0;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #4338ca;
+  white-space: nowrap;
+}
+
+.sub-note {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+  margin: 2px 0;
+}
+
+.sub-note.warn,
+.warn {
+  color: #b45309;
+}
+
+.mono {
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.prereq {
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.7;
+}
+
+.detail-row > td {
+  padding-top: 0;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fafbfc;
+}
+
+.detail-row summary {
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.row-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+
+.row-btns h3 {
+  margin: 0;
+}
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.filter-row label {
+  max-width: 160px;
+  margin-bottom: 4px;
+}
+
+.cred-line,
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-direction: row;
+  max-width: 640px;
+}
+
+.cred-line input {
+  flex: 1;
+  min-width: 0;
+}
+
+.check-line input {
+  flex: 0 0 auto;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.watch-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-height: 120px;
+  overflow: auto;
+  border: 1px solid #eef1f4;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.pick-item {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 4px !important;
+  max-width: none;
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
+.card textarea {
+  padding: 6px 8px;
+  border: 1px solid #d3d7de;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  max-width: 640px;
+}
+
+.result-block {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+  margin-top: 10px;
+  background: #fcfcfd;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 6px;
+}
+
+.tabs button {
+  padding: 4px 10px;
+  border: 1px solid #d3d7de;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.tabs button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.card .msg-full {
+  white-space: normal;
+  max-width: 320px;
+  color: #374151;
+}
+
+.logs-history {
+  font-size: 12px;
+}
+
+/* 回测进度条 */
+.progress-track {
+  height: 10px;
+  background: #eef1f4;
+  border-radius: 5px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.progress-fill {
+  height: 10px;
+  background: #2563eb;
+  transition: width 0.3s ease;
+}
+
+tr.row-active > td {
+  background: #e8effd;
+}
+
+/* 监控页顶部红条 */
+.alert-banner {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.alert-banner p {
+  margin: 4px 0;
+}
+
+.alert-chip {
+  display: inline-block;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin: 2px 6px 2px 0;
+  font-size: 12px;
+}
+
+.alert-banner .sub-note {
+  color: #9b2c2c;
+  margin-left: 6px;
+}

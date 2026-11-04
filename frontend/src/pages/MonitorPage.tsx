@@ -2,9 +2,93 @@ import { useEffect, useState } from 'react'
 import {
   api,
   getHealth,
+  getReconcile,
   openEvents,
   type Health,
+  type ReconcileDiff,
 } from '../api/client'
+
+const DIFF_KIND_CN: Record<string, string> = {
+  order_missing_local: '券商有委托、本地无记录',
+  order_state_mismatch: '委托状态不一致',
+  trade_missing_local: '券商有成交、本地无记录',
+  position_mismatch: '持仓不一致',
+  account_mismatch: '资金不一致',
+}
+
+/**
+ * 顶部红条：未处理对账差异 + 通道断连（channel_down / channel_up 事件驱动）。
+ * 只是把服务端广播的事实显示出来，不做任何风险判定。
+ */
+function AlertBanner() {
+  const [diffs, setDiffs] = useState<ReconcileDiff[]>([])
+  const [down, setDown] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let alive = true
+    const load = () =>
+      getReconcile(200)
+        .then((r) => {
+          if (alive) setDiffs(r.diffs)
+        })
+        .catch(() => undefined)
+    load()
+    const t = setInterval(load, 30000)
+    const close = openEvents((data) => {
+      const d = data as {
+        type?: string
+        data?: { action?: string; channel?: string; detail?: string; note?: string }
+      }
+      const dd = d.data
+      if (d?.type !== 'risk' || !dd?.action) return
+      if (dd.action === 'reconcile_diff') load()
+      else if (dd.action === 'channel_down') {
+        setDown((cur) => ({ ...cur, [dd.channel ?? '未知通道']: dd.detail || dd.note || '断线' }))
+      } else if (dd.action === 'channel_up') {
+        setDown((cur) => {
+          const next = { ...cur }
+          delete next[dd.channel ?? '未知通道']
+          return next
+        })
+      }
+    })
+    return () => {
+      alive = false
+      clearInterval(t)
+      close()
+    }
+  }, [])
+
+  const downList = Object.entries(down)
+  if (diffs.length === 0 && downList.length === 0) return null
+
+  const kinds = Array.from(new Set(diffs.map((d) => d.kind)))
+  return (
+    <div className="alert-banner">
+      {downList.length > 0 && (
+        <p>
+          <b>通道断连：</b>
+          {downList.map(([ch, why]) => (
+            <span key={ch} className="alert-chip">
+              {ch}｜{why}
+            </span>
+          ))}
+        </p>
+      )}
+      {diffs.length > 0 && (
+        <p>
+          <b>未处理对账差异 {diffs.length} 项：</b>
+          {kinds.map((k) => (
+            <span key={k} className="alert-chip">
+              {DIFF_KIND_CN[k] ?? k}
+            </span>
+          ))}
+          <span className="sub-note">最近对象 {diffs[0]?.ref ?? '—'}（详情见「通道」页对账区块）</span>
+        </p>
+      )}
+    </div>
+  )
+}
 
 interface OrderRow {
   order_id: string
@@ -115,6 +199,7 @@ export default function MonitorPage() {
   return (
     <section>
       <h2>实盘监控</h2>
+      <AlertBanner />
 
       <div className="monitor-cards">
         <div className="card metric-card">

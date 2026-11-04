@@ -6,14 +6,21 @@ import {
   TooltipComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // 按需注册（净值/现金折线即可）——全量引入使构建产物超 500KB
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 import {
+  apiError,
+  getBacktestRun,
+  getBacktestProgress,
   getStrategies,
-  runBacktest,
-  type BacktestResult,
+  listBacktestRuns,
+  openEvents,
+  submitBacktest,
+  type BacktestProgress,
+  type BacktestRunDetail,
+  type BacktestRunRow,
   type EquityPoint,
   type Metrics,
   type StrategyInfo,
@@ -37,9 +44,28 @@ const METRIC_CARDS: { key: keyof Metrics; label: string; fmt: (v: number | null)
   { key: 'trade_count', label: '成交笔数', fmt: (v) => (v == null ? '—' : String(v)) },
 ]
 
+const RUN_STATUS_CN: Record<string, string> = {
+  queued: '排队中',
+  running: '运行中',
+  completed: '完成',
+  failed: '失败',
+}
+
 function pct(v: number | null): string {
   if (v == null) return '—'
   return `${(v * 100).toFixed(2)}%`
+}
+
+function fmtTs(ms: number | null): string {
+  if (!ms) return '—'
+  return new Date(ms).toLocaleString('zh-CN')
+}
+
+/** 进度归一：WS 事件与 /progress 轮询共用同一套百分比口径。 */
+function percentOf(p: BacktestProgress): number {
+  if (typeof p.percent === 'number') return p.percent
+  if (p.total && p.done != null) return Math.round((100 * p.done) / p.total * 10) / 10
+  return p.status === 'completed' ? 100 : 0
 }
 
 function EquityChart({ data }: { data: EquityPoint[] }) {
@@ -94,6 +120,78 @@ function EquityChart({ data }: { data: EquityPoint[] }) {
   return <div ref={ref} style={{ width: '100%', height: 320 }} />
 }
 
+function RunHistory({ onPick, activeId }: { onPick: (id: number) => void; activeId: number | null }) {
+  const [runs, setRuns] = useState<BacktestRunRow[] | null>(null)
+  const [err, setErr] = useState('')
+
+  const refresh = useCallback(() => {
+    listBacktestRuns()
+      .then(setRuns)
+      .catch((e: unknown) => setErr(apiError(e)))
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    // 异步回测完成后清单状态会变，收到 done 事件时刷一次
+    return openEvents((data) => {
+      const d = data as { type?: string; data?: { action?: string } }
+      if (d?.type === 'log' && (d.data?.action === 'backtest_done' || d.data?.action === 'backtest_progress')) {
+        refresh()
+      }
+    })
+  }, [refresh])
+
+  return (
+    <div className="card">
+      <div className="row-btns">
+        <h3>运行历史</h3>
+        <button className="mini" onClick={refresh}>刷新</button>
+      </div>
+      {err && <p className="badge badge-down">{err}</p>}
+      {runs && runs.length > 0 ? (
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>策略</th>
+              <th>标的</th>
+              <th>周期</th>
+              <th>区间</th>
+              <th>状态</th>
+              <th>总收益</th>
+              <th>创建时间</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.run_id} className={r.run_id === activeId ? 'row-active' : undefined}>
+                <td>{r.run_id}</td>
+                <td>{r.strategy}</td>
+                <td className="mono">{r.symbol}</td>
+                <td>{r.freq}</td>
+                <td>{r.start}~{r.end}</td>
+                <td>
+                  <span className={`badge ${r.status === 'completed' ? 'badge-paper' : r.status === 'failed' ? 'badge-down' : ''}`}>
+                    {RUN_STATUS_CN[r.status] ?? r.status}
+                  </span>
+                </td>
+                <td>{typeof r.metrics.total_return === 'number' ? pct(r.metrics.total_return) : '—'}</td>
+                <td>{fmtTs(r.created_at)}</td>
+                <td>
+                  <button className="mini" onClick={() => onPick(r.run_id)}>回看</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="placeholder">暂无运行记录。</p>
+      )}
+    </div>
+  )
+}
+
 export default function BacktestPage() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [selected, setSelected] = useState<string>('')
@@ -103,17 +201,24 @@ export default function BacktestPage() {
   const [initialCash, setInitialCash] = useState('1000000')
   const [slippage, setSlippage] = useState('0')
   const [params, setParams] = useState<ParamValues>({})
-  const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
-  const [result, setResult] = useState<BacktestResult | null>(null)
+  const [detail, setDetail] = useState<BacktestRunDetail | null>(null)
+
+  // 异步运行态：WS 事件与轮询谁先到用谁的进度
+  const [activeId, setActiveId] = useState<number | null>(null)
+  const [prog, setProg] = useState<BacktestProgress | null>(null)
+  const activeRef = useRef<number | null>(null)
+  activeRef.current = activeId
+
+  const finished = prog?.status === 'completed' || prog?.status === 'failed'
 
   useEffect(() => {
     getStrategies()
       .then((ss) => {
         setStrategies(ss)
-        if (ss.length > 0) setSelected((cur) => cur || ss[0].name)
+        setSelected((cur) => cur || ss[0].name)
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setError(apiError(e)))
   }, [])
 
   const current = useMemo(() => strategies.find((s) => s.name === selected), [strategies, selected])
@@ -126,10 +231,69 @@ export default function BacktestPage() {
     setParams(next)
   }, [current])
 
+  const loadResult = useCallback((runId: number) => {
+    getBacktestRun(runId)
+      .then(setDetail)
+      .catch((e: unknown) => setError(apiError(e)))
+  }, [])
+
+  // 完成后拉结果；进度事件与轮询都只更新进度，避免重复请求结果
+  useEffect(() => {
+    if (activeId != null && prog?.status === 'completed') loadResult(activeId)
+  }, [activeId, prog?.status, loadResult])
+
+  // 进度轮询兜底（WS 断线时仍能推进），与 WS 事件互不冲突
+  useEffect(() => {
+    if (activeId == null || finished) return
+    let alive = true
+    const poll = () =>
+      getBacktestProgress(activeId)
+        .then((p) => {
+          if (alive) setProg(p)
+        })
+        .catch(() => undefined)
+    poll()
+    const t = setInterval(poll, 1500)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [activeId, finished])
+
+  useEffect(
+    () =>
+      openEvents((data) => {
+        const d = data as {
+          type?: string
+          data?: { action?: string; run_id?: number; done?: number; total?: number; message?: string }
+        }
+        const dd = d.data
+        if (d?.type !== 'log' || !dd?.action) return
+        const runId = dd.run_id
+        if (runId == null || runId !== activeRef.current) return
+        if (dd.action === 'backtest_progress') {
+          const total = dd.total ?? 0
+          const done = dd.done ?? 0
+          setProg((cur) => ({
+            ...(cur ?? {}),
+            run_id: runId,
+            status: 'running',
+            done,
+            total,
+            percent: total ? Math.round((100 * done) / total * 10) / 10 : 0,
+          }))
+        } else if (dd.action === 'backtest_done') {
+          setProg({ run_id: runId, status: 'completed', percent: 100, message: dd.message })
+        }
+      }),
+    [],
+  )
+
   const submit = async () => {
-    if (!selected || running) return
-    setRunning(true)
+    if (!selected || (activeId != null && !finished)) return
     setError('')
+    setDetail(null)
+    setProg({ status: 'queued', percent: 0 })
     try {
       const typed: Record<string, string | number> = {}
       for (const [k, raw] of Object.entries(params)) {
@@ -137,7 +301,7 @@ export default function BacktestPage() {
         const num = Number(raw)
         typed[k] = typeof def === 'number' && Number.isFinite(num) ? num : raw
       }
-      const out = await runBacktest({
+      const ack = await submitBacktest({
         strategy: selected,
         symbols: symbol.split(/[,，\s]+/).filter(Boolean),
         params: typed,
@@ -146,14 +310,15 @@ export default function BacktestPage() {
         initial_cash: Number(initialCash) || 1000000,
         slippage: Number(slippage) || 0,
       })
-      setResult(out)
+      setActiveId(ack.run_id)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setError(msg)
-    } finally {
-      setRunning(false)
+      setProg(null)
+      setError(apiError(e)) // 入队前校验失败（如本地无数据）由服务端给原因
     }
   }
+
+  const percent = prog ? percentOf(prog) : 0
+  const runningNow = activeId != null && !finished
 
   return (
     <section>
@@ -210,70 +375,119 @@ export default function BacktestPage() {
               ))}
             </>
           )}
-          <button disabled={running || !selected} onClick={submit}>
-            {running ? '回测运行中…' : '运行回测'}
+          <button disabled={runningNow || !selected} onClick={submit}>
+            {runningNow ? '回测排队/运行中…' : '运行回测'}
           </button>
+          <p className="sub-note">
+            默认异步执行：提交后立即返回 run_id，进度来自事件流与轮询（二者取其先到的）。
+            可在「设置」中通过 backtest_async 改回同步。
+          </p>
           {error && <p className="badge badge-down">{error}</p>}
         </div>
 
         <div className="backtest-output">
-          {result ? (
+          {activeId != null && prog && (
+            <div className="card">
+              <div className="row-btns">
+                <h3>运行进度 #{activeId}</h3>
+                <span className="badge">{RUN_STATUS_CN[prog.status] ?? prog.status}</span>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
+              </div>
+              <p className="sub-note">
+                {prog.done != null && prog.total ? `已处理 ${prog.done}/${prog.total} 根 bar · ` : ''}
+                {percent.toFixed(1)}%
+                {prog.message ? ` · ${prog.message}` : ''}
+              </p>
+              {prog.status === 'failed' && (
+                <p className="badge badge-down">
+                  状态 failed：{prog.error || '后端未返回错误详情，请查看运行记录备注'}
+                </p>
+              )}
+            </div>
+          )}
+
+          {detail ? (
             <>
               <div className="metric-cards">
                 {METRIC_CARDS.map((m) => (
                   <div className="card metric-card" key={m.key}>
                     <span className="metric-label">{m.label}</span>
-                    <span className="metric-value">{m.fmt(result.metrics[m.key] as number | null)}</span>
+                    <span className="metric-value">
+                      {m.fmt((detail.metrics[m.key] as number | null | undefined) ?? null)}
+                    </span>
                   </div>
                 ))}
               </div>
               <div className="card">
                 <h3>
-                  净值曲线（run #{result.run_id} · {result.bars} 根 bar）
+                  净值曲线（run #{detail.run_id} · {detail.strategy} · {detail.symbol}）
                 </h3>
-                <EquityChart data={result.equity} />
+                {detail.equity.length > 0 ? (
+                  <EquityChart data={detail.equity} />
+                ) : (
+                  <p className="placeholder">无净值数据。</p>
+                )}
+                {detail.remark && <p className="sub-note warn">备注：{detail.remark}</p>}
               </div>
               <div className="card">
-                <h3>成交明细（{result.trades.length} 笔）</h3>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>时间</th>
-                      <th>代码</th>
-                      <th>方向</th>
-                      <th>价格</th>
-                      <th>数量</th>
-                      <th>金额</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.trades.map((t) => (
-                      <tr key={t.trade_id}>
-                        <td>{new Date(t.traded_at).toLocaleString('zh-CN')}</td>
-                        <td>{t.symbol}</td>
-                        <td className={t.side === 'buy' ? 'up' : 'down'}>
-                          {t.side === 'buy' ? '买入' : '卖出'}
-                        </td>
-                        <td>{t.price.toFixed(2)}</td>
-                        <td>{t.volume}</td>
-                        <td>{t.amount.toFixed(2)}</td>
+                <h3>成交明细（{(detail.trades ?? []).length} 笔）</h3>
+                {(detail.trades ?? []).length > 0 ? (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>代码</th>
+                        <th>方向</th>
+                        <th>价格</th>
+                        <th>数量</th>
+                        <th>金额</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {result.logs.length > 0 && (
+                    </thead>
+                    <tbody>
+                      {(detail.trades ?? []).map((t) => (
+                        <tr key={t.trade_id}>
+                          <td>{new Date(t.traded_at).toLocaleString('zh-CN')}</td>
+                          <td>{t.symbol}</td>
+                          <td className={t.side === 'buy' ? 'up' : 'down'}>
+                            {t.side === 'buy' ? '买入' : '卖出'}
+                          </td>
+                          <td>{t.price.toFixed(2)}</td>
+                          <td>{t.volume}</td>
+                          <td>{t.amount.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="placeholder">
+                    成交明细仅保留在进程内缓存中；服务重启后回看只有净值与指标。
+                  </p>
+                )}
+                {(detail.logs ?? []).length > 0 && (
                   <details>
-                    <summary>过程日志（{result.logs.length} 条）</summary>
-                    <pre className="logs">{result.logs.join('\n')}</pre>
+                    <summary>过程日志（{detail.logs?.length} 条）</summary>
+                    <pre className="logs">{detail.logs?.join('\n')}</pre>
                   </details>
                 )}
               </div>
             </>
+          ) : runningNow ? (
+            <div className="card placeholder">运行中，完成后再渲染曲线。</div>
           ) : (
             <div className="card placeholder">
               配置参数并点击「运行回测」；结果将展示净值曲线、指标卡片与成交明细。
             </div>
           )}
+
+          <RunHistory activeId={detail?.run_id ?? null} onPick={(id) => {
+            // 回看不启动进度轮询：只拉详情，避免历史运行反复请求 /progress
+            setActiveId(null)
+            setProg(null)
+            setError('')
+            loadResult(id)
+          }} />
         </div>
       </div>
     </section>

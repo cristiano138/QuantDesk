@@ -109,3 +109,18 @@ def test_range_of(store):
     store.write("600000.SH", Frequency.D1, _daily_df("2024-01-02", 10), AdjustType.NONE)
     lo, hi = store.range_of("600000.SH", Frequency.D1, AdjustType.NONE)
     assert f"{lo:%Y-%m-%d}" == "2024-01-02"
+
+
+def test_store_root_resolves_data_dir_at_construction(tmp_path, monkeypatch):
+    """事故回归锁：ParquetStore 曾在模块顶层绑定 data_dir，夹具改目录不生效。
+
+    后果不是测试红，而是测试把合成行情写进真实 data/parquet（覆盖同年真实 K 线）。
+    构造时才取目录，任何改 data_dir 的夹具都必须能改到存储根。
+    """
+    from quantdesk import config as cfg
+    from quantdesk.store.parquet_store import ParquetStore
+
+    monkeypatch.setattr(cfg, "data_dir", lambda: tmp_path)
+    assert ParquetStore().root == tmp_path / "parquet"
+    # 已构造的实例仍指旧根：写入只落在自己那份 root 下，不会回写真实目录
+    (tmp_path / "parquet").mkdir(parents=True, exist_ok=True)

@@ -232,3 +232,29 @@ def test_api_rejects_bad_paths_and_kinds(client):
     assert client.post("/api/interop/export/block",
                        json={"name": "空板块", "symbols": [], "targets": ["tdx"]}
                        ).status_code == 400
+
+
+def test_api_signals_scans_local_bars_and_separates_no_data(client):
+    """回归：/signals 曾漏传 freq 给 ParquetStore.read → 恒 500（信号选股页整块功能不可用）。
+
+    同时锁住两条口径：指标读前复权（宪法第 5 条），本地无数据单列 no_local_data
+    ——不能把「没下载」当成「没信号」。
+    """
+    from quantdesk.core.enums import AdjustType, Frequency
+    from quantdesk.store.parquet_store import ParquetStore
+    from tests.test_backtest import synth_df
+
+    ParquetStore().write("600000.SH", Frequency.D1, synth_df(120), adjust=AdjustType.FORWARD)
+    r = client.post("/api/interop/signals",
+                    json={"kind": "ma_cross", "params": {"fast": 5, "slow": 20},
+                          "symbols": ["600000.SH", "000001.SZ"]})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["scanned"] == 1 and out["no_local_data"] == ["000001.SZ"]
+    assert out["freq"] == "1d" and out["adjust"] == "forward"
+    assert "600000.SH" in out["details"] and "hit" in out["details"]["600000.SH"]
+    assert set(out["hits"]) <= {"600000.SH"}
+
+    empty = client.post("/api/interop/signals",
+                        json={"kind": "ma_cross", "params": {}, "symbols": []})
+    assert empty.status_code == 400 and "自选股" in empty.json()["detail"]

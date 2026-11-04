@@ -82,6 +82,23 @@ def test_invalid_values_rejected():
         apply_settings({"host": "0.0.0.0"})          # 红线字段不可经此修改
 
 
+def test_feed_priority_chain_is_editable_and_registry_validated():
+    """主源/降级链必须能在界面里改（否则「与哪个软件结合」写死在代码里）。
+
+    允许写入尚未安装 SDK 的通道（用户常先配主源再装客户端），但拒绝错名与交易通道名——
+    写错会让降级链静默少一环，事后排障找不到原因。
+    """
+    out = apply_settings({"feed_priority_history": "qmt_xtdata,tushare,akshare"})
+    assert out["feed_priority_history"] == "qmt_xtdata,tushare,akshare"
+
+    with pytest.raises(ValueError):
+        apply_settings({"feed_priority_history": "akshare,不存在的源"})
+    with pytest.raises(ValueError):
+        apply_settings({"feed_priority_realtime": "paper"})        # 交易通道不是行情源
+    with pytest.raises(ValueError):
+        apply_settings({"feed_priority_financial": ""})            # 空链=整条链无财务数据
+
+
 def test_riskgate_reads_live_config_each_submit(monkeypatch, tmp_path):
     """闸①动态读配置：切开关即时影响下一单路由（无需重启/重建闸）。"""
     from quantdesk.store.db import init_db

@@ -343,6 +343,19 @@ def logs_query(limit: int = 200, offset: int = 0, source: str | None = None,
              "strategy_id": r.strategy_id, "message": r.message} for r in rows]}
 
 
+def logs_sources(db_path=None) -> list[dict]:
+    """已有日志的来源与条数（历史日志页「来源」过滤的事实源，不让用户手填字符串）。"""
+    from sqlalchemy import func as sa_func
+
+    from quantdesk.store.models_db import LogRow
+
+    with get_session(db_path) as s:
+        rows = s.exec(select(LogRow.source, sa_func.count(LogRow.id))
+                      .group_by(LogRow.source)
+                      .order_by(sa_func.count(LogRow.id).desc())).all()
+        return [{"source": r[0], "count": int(r[1])} for r in rows if r[0]]
+
+
 def logs_purge(before_ms: int, db_path=None) -> int:
     """保留期清理（盘后任务调用，防止日志表无限增长）。"""
     from sqlalchemy import delete as sa_delete

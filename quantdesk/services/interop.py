@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from quantdesk.core.enums import Frequency
+from quantdesk.core.enums import AdjustType, Frequency
 from quantdesk.core.errors import QuantDeskError
 from quantdesk.core.symbols import from_internal, to_internal
 
@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 
 __all__ = ["SignalRule", "RULE_KINDS", "export_tdx_block", "export_ths_block",
            "parse_tdx_block", "parse_bare_block", "write_block", "block_targets",
-           "compile_formula", "evaluate_rule", "export_dir"]
+           "compile_formula", "evaluate_rule", "export_dir",
+           "scan_history_signals", "scan_signal_detail"]
 
 # 通达信板块文件市场位：1=沪、0=深；北交所各版本口径不一，默认不支持（需显式配置）
 _TDX_MARKET = {"SH": "1", "SZ": "0"}
@@ -439,15 +440,32 @@ def _client_block_dir(target: str) -> Path | None:
 def scan_history_signals(store, rule: SignalRule, symbols: list[str],
                          freq: Frequency = Frequency.D1, limit: int = 300) -> list[str]:
     """在本地 Parquet 上跑规则，返回命中的标的（导出成客户端板块的输入）。"""
-    hits = []
+    return scan_signal_detail(store, rule, symbols, freq, limit)["hits"]
+
+
+def scan_signal_detail(store, rule: SignalRule, symbols: list[str],
+                       freq: Frequency = Frequency.D1, limit: int = 300,
+                       adjust: AdjustType = AdjustType.FORWARD) -> dict:
+    """逐标的求值并给出可解释结果（前端「信号选股」的事实源）。
+
+    口径：指标一律用前复权（宪法第 5 条）；本地无数据不等于「没命中」，单列 no_local_data，
+    避免用户把「没下载」读成「没信号」。
+    """
+    hits, no_data, details = [], [], {}
     for sym in symbols[:limit]:
         try:
-            df = store.read(sym, freq)
+            df = store.read(sym, freq, adjust=adjust)
         except Exception as e:  # noqa: BLE001 单标的读取失败不影响整体扫描
             log.warning("信号扫描读取失败 %s: %s", sym, e)
+            no_data.append(sym)
             continue
         if df.empty:
+            no_data.append(sym)
             continue
-        if rule.evaluate(df)["hit"]:
+        res = rule.evaluate(df)
+        details[sym] = res
+        if res["hit"]:
             hits.append(sym)
-    return hits
+    return {"hits": hits, "no_local_data": no_data, "details": details,
+            "scanned": len(symbols[:limit]) - len(no_data),
+            "freq": freq.value, "adjust": adjust.value}

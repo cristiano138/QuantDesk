@@ -150,18 +150,8 @@ def signals(req: SignalScanRequest) -> dict:
     except interop.InteropError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     symbols = _symbols(req)
-    store = ParquetStore()
-    hits, no_data = [], []
-    details = {}
-    for s in symbols:
-        df = store.read(s)
-        if df.empty:
-            no_data.append(s)
-            continue
-        res = interop.evaluate_rule(rule, df)
-        details[s] = res
-        if res["hit"]:
-            hits.append(s)
-    return {"rule": {"kind": rule.kind, "params": rule.params, "title": rule.title},
-            "scanned": len(symbols) - len(no_data), "hits": hits,
-            "no_local_data": no_data, "details": details}
+    if not symbols:
+        raise HTTPException(status_code=400,
+                            detail="未指定标的：symbols 为空且自选股里没有内容（先在行情页加自选）")
+    out = interop.scan_signal_detail(ParquetStore(), rule, symbols)
+    return {"rule": {"kind": rule.kind, "params": rule.params, "title": rule.title}, **out}
