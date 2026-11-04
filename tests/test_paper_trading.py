@@ -237,3 +237,74 @@ def test_api_trading_roundtrip(db, tmp_path, monkeypatch):
         # 非法参数
         assert client.post("/api/trading/orders", json={
             "symbol": SYM, "side": "buy", "volume": 0}).status_code == 422
+
+
+def test_part_filled_resting_order_survives_restart(tmp_path):
+    """回归：部分成交挂单的余量在重启后仍存活（此前只恢复 SUBMITTED）。"""
+    import dataclasses
+
+    from quantdesk.store.db import init_db as _idb
+    from quantdesk.store.repo import upsert_order
+
+    db = tmp_path / "pf.db"
+    _idb(db)
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    svc.start()
+    # 直接种一条 part_filled 挂单到库（模拟重启前的部分成交状态）
+    o = dataclasses.replace(
+        svc.place_order(SYM, "buy", 500, price=9.0),
+        status=OrderStatus.PART_FILLED, filled_volume=200, avg_filled_price=9.0)
+    upsert_order(o, db_path=db)
+
+    svc.stop()
+    svc2 = TradingService(initial_cash=100_000.0, db_path=db)
+    svc2.start()                                   # _restore 应把它放回挂单簿
+    assert o.order_id in svc2.paper._resting
+    # tick 下探 → 余量（300）继续成交
+    svc2.paper.on_tick(mk_tick(8.8))
+    o2 = svc2.get_order(o.order_id)
+    assert o2 is not None and o2.status == OrderStatus.FILLED
+    assert o2.filled_volume == 500                 # 200 已成交 + 300 余量补齐
+
+
+def test_concurrent_tick_and_order_threads(tmp_path):
+    """并发冒烟：实时回调线程（on_tick）与下单线程并发操控同一 broker，
+    无异常、现金不为负、账目自洽（D14 接实时源前的并发防护回归）。"""
+    import threading
+
+    from quantdesk.store.db import init_db as _idb
+
+    db = tmp_path / "conc.db"
+    _idb(db)
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    errors: list[str] = []
+
+    def feeder():
+        for i in range(200):
+            try:
+                price = 10.0 + 0.01 * (i % 20)
+                svc.paper.on_tick(mk_tick(round(price, 2),
+                                          dt=datetime(2026, 11, 4, 9, 30)))
+            except Exception as e:                 # noqa: BLE001
+                errors.append(f"feeder: {e}")
+
+    def trader():
+        for i in range(50):
+            try:
+                side = "buy" if i % 2 == 0 else "sell"
+                svc.place_order(SYM, side, 100,
+                                price=round(9.0 + 0.01 * (i % 30), 2))
+            except Exception as e:                 # noqa: BLE001
+                errors.append(f"trader: {e}")
+
+    threads = [threading.Thread(target=feeder), threading.Thread(target=trader),
+               threading.Thread(target=trader)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [], errors[:5]
+    # 不变量：现金非负；总资产 = 现金 + 市值
+    acct = svc.account()
+    assert acct.cash >= -1e-6
+    assert acct.total_asset == pytest.approx(acct.cash + acct.market_value, abs=0.02)

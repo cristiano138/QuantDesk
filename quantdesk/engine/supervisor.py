@@ -51,6 +51,9 @@ class StrategySupervisor:
         self.last_heartbeat: float = 0.0
         self._ever_beat = False                # 重启宽限：首次心跳到达前不做心跳判死
         self._spawn_monotonic: float = 0.0
+        self._republish_until: float = 0.0     # 持仓快照重发窗口（slow-joiner 对策）
+        self._last_republish: float = 0.0
+        self.ready_seen = threading.Event()    # 子进程 ready（由监控线程独占消费 PULL）
         self.last_logs: deque[str] = deque(maxlen=10)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -101,7 +104,14 @@ class StrategySupervisor:
         self.last_heartbeat = time.monotonic()
         self._spawn_monotonic = time.monotonic()
         self._ever_beat = False
-        # 持仓视图恢复：把 SQLite 最新持仓快照广播给子进程（重启不丢上下文）
+        # PUB/SUB slow-joiner：spawn 后立即广播会丢（子进程 SUB 未订阅）。
+        # 策略：spawn 后 3s 内每 0.5s 重发一次持仓快照（见 _monitor_loop），
+        # 外加收到 "ready" 时立即补发——双保险保证子进程拿到恢复上下文。
+        self._republish_until = time.monotonic() + 3.0
+        self._last_republish = 0.0
+
+    def _publish_position_snapshot(self) -> None:
+        """把 SQLite 最新持仓快照广播给子进程（重启上下文恢复）。"""
         positions = [
             {"symbol": p.symbol, "volume": p.volume, "available": p.available,
              "avg_cost": p.avg_cost, "market_value": p.market_value,
@@ -114,17 +124,35 @@ class StrategySupervisor:
         while not self._stop.is_set():
             try:
                 self._drain_intents()
+                self._republish_snapshot_if_due()
                 self._check_health()
             except Exception:                      # noqa: BLE001 — 停机竞态不炸守护线程
                 if self._stop.is_set():
                     return
             time.sleep(self.monitor_tick)
 
+    def _republish_snapshot_if_due(self) -> None:
+        """spawn 后 3s 窗口内每 0.5s 重发持仓快照（覆盖 SUB 订阅传播的不确定时点）。"""
+        now = time.monotonic()
+        if now < self._republish_until and now - self._last_republish >= 0.5:
+            self._last_republish = now
+            try:
+                self._publish_position_snapshot()
+            except Exception:                      # noqa: BLE001
+                pass
+
     def _drain_intents(self) -> None:
         for tag, data in self.bridge.drain_intents(max_items=500):
             if tag == "heartbeat":
                 self.last_heartbeat = time.monotonic()
                 self._ever_beat = True
+            elif tag == "ready":
+                # 子进程 SUB 已连接（ready 在 connect 之后发出）→ 此刻补发持仓快照不丢
+                self.ready_seen.set()
+                try:
+                    self._publish_position_snapshot()
+                except Exception:                  # noqa: BLE001
+                    pass
             elif tag == "log":
                 self.last_logs.append(str(data.get("message", "")))
                 self._publish(EventType.LOG, data | {"strategy_id": self.strategy_id})

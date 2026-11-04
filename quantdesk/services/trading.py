@@ -14,6 +14,7 @@ from quantdesk.core.enums import OrderStatus, OrderType, Side
 from quantdesk.core.events import SYSTEM_BUS, EventBus
 from quantdesk.core.models import Account, Order, Position, Trade
 from quantdesk.engine.riskgate import RiskGate
+from quantdesk.store import repo
 
 __all__ = ["TradingService", "get_trading_service"]
 
@@ -76,7 +77,8 @@ class TradingService:
     # ---------- 查询 ----------
     def get_order(self, order_id: str) -> Order | None:
         self.start()
-        return _find(self.paper.get_orders(), order_id)
+        # 按主键直查（get_orders 有 1000 条截断，列表查找会漏旧单）
+        return repo.get_order(order_id, db_path=self.paper.db_path)
 
     def list_orders(self, status: str | None = None) -> list[Order]:
         self.start()

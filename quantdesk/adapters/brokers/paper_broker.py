@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -62,27 +63,37 @@ class PaperBroker(BrokerAdapter):
         self._latest: dict[str, Tick] = {}
         self._resting: dict[str, Order] = {}
         self._connected = False
+        # 并发防护：D14 起实时回调线程（on_tick）与 API 线程（place_order）并发
+        # 进入撮合/记账，共享 book/cash/resting——全程持锁（RLock 允许内部重入）
+        self._lock = threading.RLock()
 
     # ---------- 生命周期 ----------
     def connect(self, **credentials) -> None:
-        self._restore()
-        self._connected = True
+        with self._lock:
+            self._restore()
+            self._connected = True
 
     def disconnect(self) -> None:
-        if self._connected:
-            self._snapshot_positions()
-        self._connected = False
+        with self._lock:
+            if self._connected:
+                self._snapshot_positions()
+            self._connected = False
 
     def health_check(self) -> bool:
         return self._connected
 
     # ---------- 行情注入（运行时/测试喂 tick；D14 接实时源后由运行时调用） ----------
     def on_tick(self, tick: Tick) -> None:
-        self._latest[tick.symbol] = tick
-        self._match_resting(tick)
+        with self._lock:
+            self._latest[tick.symbol] = tick
+            self._match_resting(tick)
 
     # ---------- 交易 ----------
     def place_order(self, order: Order) -> Order:
+        with self._lock:
+            return self._place_order_locked(order)
+
+    def _place_order_locked(self, order: Order) -> Order:
         if not self._connected:
             raise BrokerError("paper 通道未连接")
         o = replace(order, status=OrderStatus.SUBMITTED)
@@ -114,7 +125,8 @@ class PaperBroker(BrokerAdapter):
         return o
 
     def cancel_order(self, order_id: str) -> bool:
-        o = self._resting.pop(order_id, None)
+        with self._lock:
+            o = self._resting.pop(order_id, None)
         if o is None:
             return False
         o = replace(o, status=OrderStatus.CANCELLED, message="用户撤单",
@@ -219,9 +231,10 @@ class PaperBroker(BrokerAdapter):
         self.book.on_new_trading_day()               # 历史买入全部转为可用
         for t in cur:                                # 今日买入 available 不增
             self.book.apply_trade(t, fee=fee.fee(t.side, t.amount))
-        # 当日未成交挂单恢复（重启不丢挂单）
-        for o in repo.list_orders(status=OrderStatus.SUBMITTED, db_path=self.db_path):
-            self._resting[o.order_id] = o
+        # 当日未成交挂单恢复（重启不丢挂单；含部分成交的余量）
+        for st in (OrderStatus.SUBMITTED, OrderStatus.PART_FILLED):
+            for o in repo.list_orders(status=st, db_path=self.db_path):
+                self._resting[o.order_id] = o
 
     def _snapshot_positions(self) -> None:
         repo.save_positions_snapshot(self.book.positions(), db_path=self.db_path)
