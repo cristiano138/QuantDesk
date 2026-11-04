@@ -647,14 +647,51 @@ def test_unit_labels_are_chinese_from_the_service(db, monkeypatch):
 
 
 def test_first_load_seeds_even_when_closed(db, monkeypatch):
-    """收盘后打开页面也必须看到当日真实数字：缓存为空时先种一次，之后才闭嘴。"""
+    """收盘后打开页面也必须看到当日真实数字：缓存里缺谁就补谁，之后才闭嘴。"""
     _closed_clock(monkeypatch)
     tx = FakeTx({"600000.SH": _row("600000.SH")})
     svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=FakeEm())
     svc.set_pool(["600000.SH"])
     first = svc.refresh_auto()
     assert first["polled"] is True and len(first["rows"]) == 1
-    assert "首次" in first["reason"]
+    assert "快照" in first["reason"]
     second = svc.refresh_auto()
     assert second["polled"] is False and tx.calls == 1      # 只打了一次
     assert len(second["rows"]) == 1                          # 但列表照样有数
+
+
+def test_partial_cache_still_seeds_the_rest_of_the_pool(db, monkeypatch):
+    """休市时的"要不要补取"必须按标的逐个判，不能用"缓存空不空"。
+
+    真实现场：重启后端 → 先用 curl 打开一只的详情（详情会补取该只快照）→ 再开盯盘页。
+    此时 `bool(self._live)` 为真，旧逻辑认为"已经种过了"，其余 7 只永远不会被取，
+    列表于是显示一排 `last=0.0` 的陈旧行——而"价格是 0"看起来比"没数据"更像结论。
+    """
+    _closed_clock(monkeypatch)
+    rows = {s: _row(s) for s in ("600000.SH", "000001.SZ", "00700.HK")}
+    tx = FakeTx(rows)
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=FakeEm())
+    svc.set_pool(["600000.SH", "000001.SZ", "00700.HK"])
+    svc.flow("00700.HK", force=True)                  # 详情只把 00700 放进缓存
+    assert set(svc._live) == {"00700.HK"}
+    out = svc.refresh_auto()
+    assert out["polled"] is True, "池内还有两只没快照，休市也必须补一次"
+    assert len(out["rows"]) == 3
+    listing = svc.list_rows()
+    assert all(r["last"] > 0 for r in listing), "补齐后不该再有 0 价行"
+    assert not any(r["stale"] for r in listing)
+    calls = tx.calls
+    again = svc.refresh_auto()                        # 全都齐了 → 闭嘴
+    assert again["polled"] is False and tx.calls == calls
+    assert "未外呼" in again["reason"]
+
+    # 补不上来的标的（代码错/停牌无数据）不能变成"每次进页面都撞一次接口"：
+    # 冷却是按服务算的，一次成功种过之后，短期内新增缺失标的只报原因不再外呼
+    svc.set_pool(["600000.SH", "000001.SZ", "00700.HK", "600519.SH"])
+    svc._seed_attempt_at = 0.0                         # 当作冷却已过期
+    miss = svc.refresh_auto()
+    assert miss["polled"] is True                      # 缺 600519，试一次
+    tried = tx.calls
+    hold = svc.refresh_auto()
+    assert hold["polled"] is False and tx.calls == tried, "冷却期内不该再撞"
+    assert "不重复补取" in hold["reason"]

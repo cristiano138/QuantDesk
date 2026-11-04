@@ -46,6 +46,10 @@ _BUCKET_EDGES = (40_000.0, 200_000.0, 1_000_000.0)
 _BUCKET_NAMES = ("small", "medium", "big", "huge")
 
 _FLOW_TTL_S = 20.0          # 单标的逐笔重算的最小间隔（details 是重请求，别按 3s 打）
+# 休市时补齐"池内没快照的标的"的冷却：判据必须是"缺不缺"，不能用"缓存空不空"——
+# 只要有一只（比如刚点开过的详情）在缓存里，"缓存非空"就永远为真，其余标的再也不会被取，
+# 界面上一排 last=0.0 的陈旧行看着像"这只股票价格是 0"。
+_SEED_COOLDOWN_S = 300.0
 # 一次取全日逐笔的条数上限：买卖量与明细分页共用这一份，A股全日约 4~5 千笔，港股更多些
 _TICK_FETCH_COUNT = 6000
 
@@ -241,6 +245,7 @@ class WatchService:
         self.stats = {"snapshots": 0, "flow_calls": 0, "errors": 0, "stale": 0}
         self.last_refresh_at = 0
         self.last_error = ""
+        self._seed_attempt_at = 0.0      # 上次"补齐缺失标的"外呼的时刻（monotonic），防反复撞
 
     # ---------- 通道（惰性取，未就绪就如实报缺） ----------
     def _feeds(self) -> tuple[Any, Any]:
@@ -421,15 +426,21 @@ class WatchService:
         live_now = any(s["state"] in ("open", "pre_open", "post_close") for s in sessions.values())
         syms = symbols or self.pool()
         with self._lock:
-            seeded = bool(self._live)
-        if force or live_now or not seeded:
+            missing = [s for s in syms if s not in self._live]
+            left = _SEED_COOLDOWN_S - (time.monotonic() - self._seed_attempt_at)
+        if force or live_now or (missing and left <= 0):
+            if not (force or live_now):
+                self._seed_attempt_at = time.monotonic()
             rows = self.refresh(syms)
             return {"rows": rows, "polled": True, "sessions": sessions,
-                    "reason": "" if (force or live_now) else "首次进入：取一次当日快照，此后休市不再外呼"}
+                    "reason": "" if (force or live_now)
+                    else f"池内 {len(missing)} 只还没有快照：补取一次，此后休市不再外呼"}
         with self._lock:
             cached = [self._live[s] for s in syms if s in self._live]
-        return {"rows": cached, "polled": False, "sessions": sessions,
-                "reason": "两个市场均休市，返回当日最后一次快照（未外呼）"}
+        reason = "两个市场均休市，返回当日最后一次快照（未外呼）"
+        if missing and left > 0:
+            reason += f"；池内有 {len(missing)} 只无快照，{left:.0f}s 内不重复补取"
+        return {"rows": cached, "polled": False, "sessions": sessions, "reason": reason}
 
     def live(self, symbol: str | None = None) -> Any:
         with self._lock:
