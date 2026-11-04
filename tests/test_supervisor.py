@@ -42,6 +42,29 @@ def strategy_file(tmp_path_factory):
     return p
 
 
+@pytest.fixture(autouse=True)
+def _isolate_data_dir(tmp_path, monkeypatch):
+    """把 data_dir 钉到临时目录，并连**默认库**一起建表。
+
+    两件事缺一不可：
+    1. supervisor 判死时会往 `data_dir()/logs` 落 `crash_<strategy_id>_<ts>.log`，
+       不隔离的话每跑一次本文件就往真实 `data/logs/` 里丢十几个崩溃日志（实测攒到 582 个）；
+    2. `paper_broker` 这类组件内部用默认路径取库（`repo.account_get(db_path=self.db_path)`
+       而它的 db_path 是 None），只隔离日志目录不给默认库建表，它就会去摸真实库——
+       这两个用例此前正是靠真实库里已有表才没报错的。
+    """
+    monkeypatch.setenv("QUANTDESK_DATA_DIR", str(tmp_path))
+    from quantdesk.config import get_settings
+    from quantdesk.store.db import init_db, reset_engine
+
+    get_settings.cache_clear()
+    reset_engine()
+    init_db()                       # 默认库（tmp 下）建表，杜绝蹭真实库
+    yield tmp_path
+    reset_engine()
+    get_settings.cache_clear()
+
+
 def _wait_ready(sup: StrategySupervisor, timeout=20.0):
     """等子进程 ready——读 supervisor.ready_seen 标志（监控线程独占消费 PULL socket，
     测试线程绝不并发 recv，规避 ZMQ socket 线程安全限制）。"""

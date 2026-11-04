@@ -145,6 +145,7 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 | AKShare 拉数中断/报 `ConnectionLostError` | 触发了限流熔断（封禁期内重试会延长封禁）。等 5/15/30 分钟冷却后重跑；长期放缓：`QUANTDESK_AKSHARE_MIN_INTERVAL=3.0` |
 | miniQMT 掉线 | 通道状态灯变红；RiskGate fail-closed 拒单属预期。重启 miniQMT 登录后适配器重连并重放订阅 |
 | easytrader 控件丢失 | 适配器自动截图到 `data/logs/`；锁定同花顺客户端版本、操作期间勿动鼠标键盘、建议独立 Windows 账户 |
+| 双击 `启动.bat` 没窗口/报一串乱码「不是内部或外部命令」 | 两类原因，都已在仓库里根治：① **`.bat` 必须是 CRLF 且正文纯 ASCII**——`cmd` 按字节偏移读批处理，裸 LF 或多字节中文注释会让解析器错位，把 `-m quantdesk.app` 切到中间当命令执行；② **8787 被别的后端占着**（上一条会话残留、或你已开过一次）。现在的脚本会先探 `http://127.0.0.1:8787/api/system/health`，健康就直接开窗口不再重复起后端，不健康才启动。排查：`netstat -ano \| findstr 8787` 看 PID，再 `taskkill /PID <pid> /F` |
 | 后端 8787 被占用 | `netstat -ano \| findstr 8787` 找 PID 结束旧进程；端口经 `QUANTDESK_PORT` 修改（监听地址不可改） |
 | 回测报「本地无数据」 | 先在数据管理页/命令行下载对应标的与周期（K 线全部走 Parquet 本地缓存，不外呼） |
 | 待确认单重启后还在？ | 在。重启后 `restore_pending()` 从库重载，确认窗口重新起算 |

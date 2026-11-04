@@ -154,6 +154,15 @@ Account{total_asset, cash, market_value, frozen, updated_at}
   不跳步。
 - 外部调用（数据源/券商）必须带超时、结构化异常、日志；回调线程只入队。
 - 日志脱敏：账号/token 只打前 4 位 + \*\*\*。
+- **Windows 启动器一律 CRLF + 纯 ASCII**：`启动.bat` 这类被 `cmd.exe` 执行的脚本，
+  正文与注释都不许出现多字节 UTF-8 字符，行尾必须是 CRLF。`cmd` 按**字节偏移**增量读取
+  `.bat`，裸 LF 与多字节字符会让它的解析器错位，把一行的一部分当命令执行——本机实测报过
+  `'esk.app' 不是内部或外部命令`（`-m quantdesk.app` 被切在中间）。中文提示交给前端做，
+  启动器只留 ASCII；改完必须实跑一遍双击路径验收。
+- **测试不许污染真实运行目录**：任何会写 `data/`（日志、Parquet、SQLite）的用例，
+  必须在夹具里换掉 `QUANTDESK_DATA_DIR` **并清 settings 缓存与引擎**，`init_db()` 默认库也要在
+  临时目录建好——否则内部用默认路径的组件（如 `paper_broker`）会去摸真实库，
+  用例靠真实库的表"假装通过"。本轮清掉历史污染的 582 个 `crash_*.log`。
 - 中文 UI 文案；代码注释可中文；标识符一律英文。
 - 时间戳统一存 INTEGER 毫秒（UTC），展示层再本地化。
 
