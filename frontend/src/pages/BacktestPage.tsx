@@ -1,5 +1,15 @@
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { useEffect, useMemo, useRef, useState } from 'react'
+
+// 按需注册（净值/现金折线即可）——全量引入使构建产物超 500KB
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 import {
   getStrategies,
   runBacktest,
@@ -34,22 +44,22 @@ function pct(v: number | null): string {
 
 function EquityChart({ data }: { data: EquityPoint[] }) {
   const ref = useRef<HTMLDivElement>(null)
-  const chartRef = useRef<echarts.ECharts | null>(null)
+  const instRef = useRef<ReturnType<typeof echarts.init> | null>(null)
 
   useEffect(() => {
     if (!ref.current) return
-    chartRef.current = echarts.init(ref.current)
-    const onResize = () => chartRef.current?.resize()
+    instRef.current = echarts.init(ref.current)
+    const onResize = () => instRef.current?.resize()
     window.addEventListener('resize', onResize)
     return () => {
       window.removeEventListener('resize', onResize)
-      chartRef.current?.dispose()
-      chartRef.current = null
+      instRef.current?.dispose()
+      instRef.current = null
     }
   }, [])
 
   useEffect(() => {
-    const chart = chartRef.current
+    const chart = instRef.current
     if (!chart) return
     const dts = data.map((p) => p.dt.slice(0, 10))
     chart.setOption({
@@ -78,7 +88,7 @@ function EquityChart({ data }: { data: EquityPoint[] }) {
           lineStyle: { width: 1, type: 'dashed', opacity: 0.6 },
         },
       ],
-    })
+    } as echarts.EChartsCoreOption)
   }, [data])
 
   return <div ref={ref} style={{ width: '100%', height: 320 }} />

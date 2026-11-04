@@ -99,12 +99,6 @@ class TradingService:
         return ts[-limit:]
 
 
-def _find(orders: list[Order], order_id: str) -> Order | None:
-    for o in orders:
-        if o.order_id == order_id:
-            return o
-    return None
-
 
 _service: TradingService | None = None
 _service_lock = threading.Lock()

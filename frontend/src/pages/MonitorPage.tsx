@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   api,
   getHealth,
+  openEvents,
   type Health,
 } from '../api/client'
 
@@ -58,27 +59,40 @@ const STATUS_CN: Record<string, string> = {
   expired_confirm: '确认超时',
 }
 
-function usePoll<T>(fn: () => Promise<T>, ms: number): T | null {
+function usePoll<T>(fn: () => Promise<T>, ms: number, trigger = 0): T | null {
   const [v, setV] = useState<T | null>(null)
   useEffect(() => {
     const load = () => fn().then(setV).catch(() => undefined)
     load()
     const t = setInterval(load, ms)
     return () => clearInterval(t)
-  }, [fn, ms])
+  }, [fn, ms, trigger])
   return v
 }
 
 export default function MonitorPage() {
   const [health, setHealth] = useState<Health | null>(null)
+  // WS 事件（order/trade/position/account）到达即刻触发一轮拉取——
+  // 成交/状态变化即时上屏；轮询保留为断线兜底
+  const [wsTick, setWsTick] = useState(0)
+  useEffect(
+    () =>
+      openEvents((data) => {
+        const t = (data as { type?: string })?.type
+        if (t === 'order' || t === 'trade' || t === 'position' || t === 'account') {
+          setWsTick((v) => v + 1)
+        }
+      }),
+    [],
+  )
   const orders = usePoll<OrderRow[]>(
-    () => api.get<OrderRow[]>('/trading/orders').then((r) => r.data), 2000)
+    () => api.get<OrderRow[]>('/trading/orders').then((r) => r.data), 2000, wsTick)
   const positions = usePoll<PositionRow[]>(
-    () => api.get<PositionRow[]>('/trading/positions').then((r) => r.data), 2000)
+    () => api.get<PositionRow[]>('/trading/positions').then((r) => r.data), 2000, wsTick)
   const account = usePoll<AccountRow>(
-    () => api.get<AccountRow>('/trading/account').then((r) => r.data), 2000)
+    () => api.get<AccountRow>('/trading/account').then((r) => r.data), 2000, wsTick)
   const trades = usePoll<TradeRow[]>(
-    () => api.get<TradeRow[]>('/trading/trades').then((r) => r.data), 3000)
+    () => api.get<TradeRow[]>('/trading/trades').then((r) => r.data), 3000, wsTick)
 
   useEffect(() => {
     const load = () => getHealth().then(setHealth).catch(() => setHealth(null))

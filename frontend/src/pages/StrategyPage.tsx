@@ -2,6 +2,7 @@ import Editor from '@monaco-editor/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   listStrategyFiles,
+  openEvents,
   readStrategyFile,
   saveStrategyFile,
   startStrategy,
@@ -9,7 +10,6 @@ import {
   strategyStatus,
   type StrategyStatus,
 } from '../api/client'
-import { openEvents } from '../api/client'
 
 const NEW_TEMPLATE = `"""我的策略：只依赖 BaseStrategy/ctx，禁止 import 任何适配器（宪法第 6 条）。"""
 
