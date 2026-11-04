@@ -48,20 +48,26 @@ def test_compliance_validation(tmp_path, monkeypatch):
 
 
 def test_adapters_panel_shape():
-    """健康面板结构：注册表中存在的适配器 status=ok，未接入的 unavailable。"""
+    """通道面板结构：按注册表适配器名上报，含就绪状态/前置条件/能力声明。
+
+    旧口径按「文件名」列表再与注册名比对（akshare_feed vs akshare），永远判红——
+    现统一以注册表元数据为唯一事实源。
+    """
     reset_registry_for_test()
     with TestClient(app) as client:
         r = client.get("/api/system/adapters")
         assert r.status_code == 200
         body = r.json()
         assert body["simulation_only"] is True
-        names = {f["name"] for f in body["feeds"]} | {b["name"] for b in body["brokers"]}
-        assert names >= {"akshare_feed", "tushare_feed", "paper_broker"}
-        for f in body["feeds"]:
-            assert f["status"] in ("ok", "unavailable")
-        registered = set(list_adapters())
-        for f in body["feeds"]:
-            assert f["registered"] == (f["name"] in registered)
+        rows = {c["name"]: c for c in body["channels"]}
+        assert {"akshare", "tushare", "paper", "federated"} <= set(rows)
+        for name, row in rows.items():
+            assert row["status"] in ("ready", "unready", "disabled")
+            assert row["kind"] in ("data", "broker")
+            assert row["label"] and "capabilities" in row and "prereq" in row
+        assert rows["paper"]["is_paper"] is True
+        assert rows["akshare"]["status"] == "ready"      # akshare 在本机为已安装依赖
+        assert body["priority"]["realtime"]              # 通道路由优先级可见
 
 
 def test_logs_listing(tmp_path, monkeypatch):

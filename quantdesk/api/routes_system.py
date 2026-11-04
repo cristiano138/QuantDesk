@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from quantdesk import __version__
-from quantdesk.adapters import list_adapters
+from quantdesk.adapters import describe_adapters
 from quantdesk.config import data_dir, get_settings
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -16,26 +16,19 @@ router = APIRouter(prefix="/api/system", tags=["system"])
 
 @router.get("/adapters")
 def adapters() -> dict:
-    """适配器健康面板：注册状态 + 通道配置（不做外呼探活——避免面板刷新消耗配额）。"""
+    """通道面板：注册状态 + 就绪状态 + 前置条件（不做外呼探活，避免刷新消耗配额）。"""
     s = get_settings()
-    registered = set(list_adapters())
-    data_feeds = ["qmt_xtdata", "tdx_aidata", "ths_ifind", "akshare_feed", "tushare_feed"]
-    brokers = ["paper_broker", "qmt_broker", "gm_broker", "easytrader_broker"]
-
-    def entry(name: str) -> dict:
-        return {
-            "name": name,
-            "registered": name in registered,
-            "status": "ok" if name in registered else "unavailable",
-            # unavailable = 可选依赖缺失/未接入（注册表扫描跳过），接入后自动转绿
-        }
-
+    rows = describe_adapters(include_disabled=True)
     return {
         "version": __version__,
         "simulation_only": s.simulation_only,
         "broker_channel": s.broker_channel,
-        "feeds": [entry(n) for n in data_feeds],
-        "brokers": [entry(n) for n in brokers],
+        "channels": rows,
+        "priority": {
+            "history": s.feed_priority_history,
+            "realtime": s.feed_priority_realtime,
+            "financial": s.feed_priority_financial,
+        },
         "limits": {
             "akshare_min_interval": s.akshare_min_interval,
             "tushare_min_interval": s.tushare_min_interval,

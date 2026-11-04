@@ -49,23 +49,34 @@ class _SimSettings:
 
 
 class RiskGate:
-    """submit() 是一切下单意图的唯一入口；confirm/reject 为第③道闸回调。"""
+    """submit() 是一切下单意图的唯一入口；confirm/reject 为第③道闸回调。
+
+    live_broker 与 live_provider 二选一：
+    - live_broker：测试/单通道场景直接注入实例；
+    - live_provider：运行时装配（services/channels.ChannelHub），每次 submit 按
+      settings.broker_channel 解析当前实盘通道——热切通道不需重启，也不缓存连接。
+    风控参数缺省即动态读设置（D19 热参纪律：每单取最新值，不缓存）；
+    显式传参则固定（用例与回测需要确定性）。
+    """
 
     def __init__(self, paper_broker=None, live_broker=None,
                  settings=None, db_path=None, event_bus: EventBus | None = None,
                  store: ParquetStore | None = None,
-                 max_position_value: float = 1_000_000.0,
-                 max_daily_orders: int = 200,
+                 max_position_value: float | None = None,
+                 max_daily_orders: int | None = None,
                  fee: FeeCalculator | None = None,
-                 confirm_timeout_s: float = 10.0) -> None:
+                 confirm_timeout_s: float = 10.0,
+                 live_provider=None) -> None:
         self.paper = paper_broker
         self.live = live_broker
+        self.live_provider = live_provider
         self.settings = settings          # None → 运行时读 config（支持 D19 热切）
         self.db_path = db_path
         self.bus = event_bus
         self.store = store
-        self.max_position_value = float(max_position_value)
-        self.max_daily_orders = int(max_daily_orders)
+        self._max_position_value = (None if max_position_value is None
+                                    else float(max_position_value))
+        self._max_daily_orders = None if max_daily_orders is None else int(max_daily_orders)
         self.fee = fee or FeeCalculator()
         self.confirm_timeout_s = float(confirm_timeout_s)
         self._pending_confirm: dict[str, Order] = {}
@@ -117,7 +128,7 @@ class RiskGate:
             o = _replace(o, order_id=self.new_order_id())
 
         sim = self._sim_only()
-        broker = self.paper if sim else self.live
+        broker = self.paper if sim else self._resolve_live()
         if broker is None:
             return self._reject(o, "模拟盘开关 OFF 且实盘通道未接入——fail-closed 拒单"
                                 if not sim else "模拟通道未装配（paper_broker 缺失）")
@@ -151,11 +162,11 @@ class RiskGate:
         """
         if broker is None:
             sim = self._sim_only()
-            broker = self.paper if sim else self.live
+            broker = self.paper if sim else self._resolve_live()
             if live is None:
                 live = not sim
         elif live is None:
-            live = broker is self.live
+            live = broker is not self.paper
         v: list[str] = []
         side = _side_str(order.side)
         otype = _otype_str(order.order_type)
@@ -220,15 +231,17 @@ class RiskGate:
             pos = next(iter(broker.get_position(order.symbol)), None)
             held_val = pos.market_value if pos else 0.0
             new_val = held_val + order.price * order.volume
-            if new_val > self.max_position_value + 1e-6:
-                v.append(f"单票市值超限：{new_val:.2f} > 上限 {self.max_position_value:.2f}")
+            cap = self._pos_cap()
+            if new_val > cap + 1e-6:
+                v.append(f"单票市值超限：{new_val:.2f} > 上限 {cap:.2f}")
 
         # 日委托数上限
         if broker is not None:
             today_ms = _today_start_ms()
             n = sum(1 for o in broker.get_orders() if o.created_at >= today_ms)
-            if n >= self.max_daily_orders:
-                v.append(f"日委托数超限：今日已 {n} ≥ 上限 {self.max_daily_orders}")
+            cap = self._orders_cap()
+            if n >= cap:
+                v.append(f"日委托数超限：今日已 {n} ≥ 上限 {cap}")
 
         return v
 
@@ -261,13 +274,20 @@ class RiskGate:
             self._armed_at.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
-        if not self.live.health_check():
+        live = self._resolve_live()
+        if live is None:
+            o = _replace(o, status=OrderStatus.FAILED,
+                         message="确认时实盘通道不可用——fail-closed")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+            return o
+        if not live.health_check():
             o = _replace(o, status=OrderStatus.FAILED, message="确认时通道断线——fail-closed")
             repo.upsert_order(o, db_path=self.db_path)
             self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
             return o
         try:
-            placed = self.live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
+            placed = live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
         except ConnectionLostError as e:
             o = _replace(o, status=OrderStatus.FAILED, message=f"通道断线：{e}")
             repo.upsert_order(o, db_path=self.db_path)
@@ -292,13 +312,38 @@ class RiskGate:
     def new_order_id(self) -> str:
         return f"OD-{uuid4().hex[:12].upper()}"
 
-    def _sim_only(self) -> bool:
+    def _current_settings(self):
         s = self.settings
         if s is None:
             from quantdesk.config import get_settings
 
             s = get_settings()
-        return bool(getattr(s, "simulation_only", True))
+        return s
+
+    def _sim_only(self) -> bool:
+        return bool(getattr(self._current_settings(), "simulation_only", True))
+
+    def _resolve_live(self):
+        """实盘通道解析：注入实例优先，其次运行时装配（按 broker_channel 热切）。"""
+        if self.live is not None:
+            return self.live
+        if self.live_provider is None:
+            return None
+        try:
+            return self.live_provider()
+        except Exception as e:  # noqa: BLE001 装配失败按「无实盘通道」处理 → 上层 fail-closed 拒单
+            log.warning("实盘通道解析失败（fail-closed 拒单）: %s", e)
+            return None
+
+    def _pos_cap(self) -> float:
+        if self._max_position_value is not None:
+            return self._max_position_value
+        return float(getattr(self._current_settings(), "max_position_value", 1_000_000.0))
+
+    def _orders_cap(self) -> int:
+        if self._max_daily_orders is not None:
+            return self._max_daily_orders
+        return int(getattr(self._current_settings(), "max_daily_orders", 200))
 
     def _reject(self, o: Order, message: str) -> Order:
         o = _replace(o, status=OrderStatus.REJECTED, message=message)

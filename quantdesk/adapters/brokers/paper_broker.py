@@ -50,6 +50,9 @@ class PaperBroker(BrokerAdapter):
 
     name = "paper"
     is_paper = True
+    label = "内置模拟撮合"
+    prereq = "无前置条件（默认通道，全局模拟盘开关 ON 时一律路由到这里）"
+    official = True
 
     def __init__(self, initial_cash: float = 1_000_000.0,
                  db_path=None, event_bus: EventBus | None = None,
@@ -242,3 +245,6 @@ class PaperBroker(BrokerAdapter):
     def _publish(self, etype: EventType, data) -> None:
         if self.bus is not None:
             self.bus.publish(Event(etype, data=data))
+
+
+ADAPTER = PaperBroker

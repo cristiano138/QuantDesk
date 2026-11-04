@@ -40,6 +40,31 @@ class Settings(BaseSettings):
     akshare_min_interval: float = 1.0   # AKShare 反爬约 1 req/s
     tushare_min_interval: float = 0.35  # 按积分档限速（200 次/分钟档）
 
+    # —— 主流股票软件通道路由（逗号分隔注册名，靠前的先用；缺失/未就绪自动跳过）——
+    feed_priority_history: str = "qmt_xtdata,tushare,akshare"
+    feed_priority_realtime: str = "qmt_xtdata,tdx_aidata"
+    feed_priority_financial: str = "ths_ifind,tushare,akshare"
+
+    # —— 通道韧性（宪法：断线可探测 + 重连后重放订阅/刷新对账）——
+    watchdog_interval_s: float = 60.0    # 健康态探活间隔
+    backoff_base_s: float = 1.0          # 重连退避起点
+    backoff_cap_s: float = 60.0          # 重连退避上限
+    reconcile_interval_s: float = 30.0   # 实盘全量对账周期（差异即事故）
+
+    # —— 风控热参（RiskGate 每单动态读取，改完即时生效不缓存）——
+    max_position_value: float = 1_000_000.0   # 单票市值上限（元）
+    max_daily_orders: int = 200               # 单策略日委托数上限
+
+    # —— 非官方通道启用位（默认禁用；设置页需输入确认文本才置 True）——
+    enable_easytrader: bool = False
+
+    # —— 主流股票软件本地目录（软件互操作：板块文件/公式导出落盘位置，非凭据）——
+    tdx_install_dir: str = ""     # 通达信安装目录（T0002 所在）
+    ths_install_dir: str = ""     # 同花顺安装目录（StockBlock 等）
+
+    # —— 回测任务队列（异步化：POST 立即返回 run_id，进度经 WS）——
+    backtest_async: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:
