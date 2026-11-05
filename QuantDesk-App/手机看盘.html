@@ -171,25 +171,47 @@ input::placeholder{color:var(--muted)}
     <span class="src" id="srcTag">—</span>
   </header>
 
-  <main id="tab-watch" class="tab on"><div id="list"></div></main>
+  <main id="tab-watch" class="tab on">
+    <div class="symbar" id="sortBar"></div>
+    <div id="list"></div>
+  </main>
 
   <main id="tab-chart" class="tab">
     <div class="symbar" id="symbar"></div>
     <div id="chartHead"></div>
+    <div class="card"><div class="h">指标</div><div class="g" id="metrics"></div></div>
+    <div class="card">
+      <div class="h">当日买卖量 <span class="tag" id="calibTag"></span></div>
+      <div id="flowOv"></div>
+    </div>
     <div class="card"><div class="h">五档盘口 <span class="tag">腾讯行情提供档位</span></div><div id="book"></div></div>
     <div class="card">
       <div class="h">分时 <span class="tag">价格 / 均价</span></div>
       <div id="rd-ts" class="readout" style="display:none"></div>
       <canvas id="cv-ts" height="230"></canvas>
+      <div class="h" style="margin-top:12px">分钟买卖量 <span class="tag">含盘后成交</span><span class="tag" id="tsVolUnit"></span></div>
+      <div id="rd-tsv" class="readout" style="display:none"></div>
+      <canvas id="cv-tsv" height="150"></canvas>
     </div>
     <div class="card">
-      <div class="h">日 K <span class="tag">前复权</span><span class="tag" id="maLegend"></span></div>
+      <div class="h"><span id="klTitle">日 K</span> <span class="tag">前复权</span><span class="tag" id="maLegend"></span></div>
+      <div class="pkTabs">
+        <span id="klFreqTabs"></span>
+        <span id="klDayTabs"></span>
+      </div>
       <div id="rd-kl" class="readout" style="display:none"></div>
       <canvas id="cv-kl" height="300"></canvas>
     </div>
     <div class="card">
       <div class="h">当日买卖量分层 <span class="tag">按单笔成交额</span><span class="tag">含盘后成交</span></div>
       <div id="flow"></div>
+    </div>
+    <div class="card">
+      <div class="h">逐笔明细 <span class="tag" id="tickCount"></span>
+        <span class="pkTabs" style="margin:0" id="tickTabs"></span>
+        <span class="pkPage" style="margin:0" id="tickPage"></span>
+      </div>
+      <div id="ticks"></div>
     </div>
   </main>
 
@@ -198,6 +220,11 @@ input::placeholder{color:var(--muted)}
       <div class="h">行情源</div>
       <div id="srcList"></div>
       <div id="conn-msg"></div>
+    </div>
+    <div class="card">
+      <div class="h">刷新节奏 <span class="tag">当前：<span id="ivCur">—</span></span></div>
+      <div class="links" id="ivList"></div>
+      <div class="note" style="margin:8px 2px 0">极速 1 秒只有腾讯整池源撑得住；东财/同花顺逐只取数，最快 5/10 秒。休市时自动刷新本来就不外呼。</div>
     </div>
     <div class="card">
       <div class="h">添加自选</div>
@@ -250,7 +277,7 @@ var DEFAULT_POOL = ['600000.SH','000001.SZ','600519.SH','300750.SZ',
 var state = {
   pool: loadPool(),
   source: localStorage.getItem(LS.src) || 'tx',
-  interval: parseInt(localStorage.getItem(LS.iv) || '1', 10),
+  interval: parseInt(localStorage.getItem(LS.iv) || '3', 10),
   rows: {},
   tab: 'watch',
   sel: null,           // 图表页当前标的
@@ -266,6 +293,13 @@ var state = {
   srcStatus: {},       // 源 -> 'ok' | 'bad' | 'busy'
   charts: {},          // key -> mountChart 状态（读数条按钮用）
   chartAt: {},         // 标的 -> 上次取分时/日K的时刻（10 秒节流）
+  klFreq: 'd',         // 日K周期：d / w / m
+  klDays: 120,
+  sortMode: localStorage.getItem('qd.sort') || 'default',
+  tickView: {side: '', offset: 0},   // 逐笔明细筛选与分页
+  calib: {date: 0, map: {1: 'sell', 2: 'buy', 4: 'neutral'}, ok: false},
+  emExtra: {},         // 标的 -> {at, pe,pb,turnover,amplitude,volratio}
+  flowAcc: {},         // 标的 -> 逐笔汇总（净额/合计，渲染总览用）
 };
 
 /* 每个源的节拍下限（秒）：一次刷新要发多少请求决定能不能跑极速档。
@@ -412,6 +446,7 @@ var TX_HK = {name:1, code:2, last:3, prev:4, open:5, vol:6, outer:null, inner:nu
              wk52High:48, wk52Low:49};
 
 function num(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
+function pos(v) { return v > 0 ? v : null; }   // 东财对缺失字段给 0 或 '-'，0 不是真值
 
 function parseTx(sym, parts) {
   var L = isHK(sym) ? TX_HK : TX_A;
@@ -469,7 +504,8 @@ function fetchTx(symbols) {
 
 var EM_F = {last:'f43', high:'f44', low:'f45', open:'f46', vol:'f47', amount:'f48',
             outer:'f49', ratio:'f50', limitA:'f51', limitB:'f52', code:'f57',
-            name:'f58', prev:'f60', pct:'f170', chg:'f169'};
+            name:'f58', prev:'f60', pct:'f170', chg:'f169',
+            pe:'f162', pb:'f167', turnover:'f168', amplitude:'f171'};
 
 function fetchOneEm(sym) {
   var fields = Object.keys(EM_F).map(function (k) { return EM_F[k]; }).join(',');
@@ -496,6 +532,9 @@ function fetchOneEm(sym) {
       bids: [], asks: [],
       limit_up: hk ? null : lim(num(d[EM_F.limitA])),
       wk52: hk ? [num(d[EM_F.limitA]), num(d[EM_F.limitB])] : null,
+      pe: pos(num(d[EM_F.pe])), pb: pos(num(d[EM_F.pb])),
+      turnover: pos(num(d[EM_F.turnover])), amplitude: pos(num(d[EM_F.amplitude])),
+      volratio: pos(num(d[EM_F.ratio])),
       avg: null, quote_time: '', source: 'em'
     };
   });
@@ -612,12 +651,14 @@ function bandOf(amountYuan) {
   for (var i = 0; i < BANDS.length; i++) if (amountYuan >= BANDS[i][0] && amountYuan < BANDS[i][1]) return BANDS[i][2];
   return '小单';
 }
-function layerTicks(rows, sym) {
+function layerTicks(rows, sym, sideMap) {
+  var map = sideMap || state.calib.map || {1: 'sell', 2: 'buy', 4: 'neutral'};
   var mul = isHK(sym) ? 1 : 100, acc = {};
   BANDS.forEach(function (b) { acc[b[2]] = {buy: 0, sell: 0, buyAmt: 0, sellAmt: 0, cnt: 0}; });
   rows.forEach(function (r) {
     var amount = r.price * r.vol * mul;
-    var band = bandOf(amount), side = r.code === '2' || r.code === '4' ? 'buy' : 'sell';
+    var side0 = map[r.code] || 'neutral';
+    var band = bandOf(amount), side = side0 === 'buy' ? 'buy' : side0 === 'sell' ? 'sell' : 'neutral';
     acc[band][side] += r.vol * mul; acc[band][side + 'Amt'] += amount; acc[band].cnt += r.n || 1;
   });
   return acc;
@@ -638,8 +679,25 @@ function fetchTimeShare(sym) {
   });
 }
 
-function fetchDaily(sym, days) {
-  if (state.source === 'ths' && !isHK(sym)) {
+/* 东财个股扩展字段（市盈/市净/换手/振幅/量比）——独立于所选行情源，20 秒缓存 */
+function fetchEmExtra(sym) {
+  var hit = state.emExtra[sym];
+  if (hit && Date.now() - hit.at < 20000) return Promise.resolve(hit.data);
+  return fetchOneEm(sym).then(function (r) {
+    var data = {pe: r.pe, pb: r.pb, turnover: r.turnover,
+                amplitude: r.amplitude, volratio: r.volratio, avg: r.avg};
+    state.emExtra[sym] = {at: Date.now(), data: data};
+    return data;
+  });
+}
+
+/* 周期 → 东财 klt（101 日 / 102 周 / 103 月）；同花顺只做日K，周月一律走东财 */
+var KL_KLT = {d: '101', w: '102', m: '103'};
+var KL_CN = {d: '日 K', w: '周 K', m: '月 K'};
+
+function fetchDaily(sym, days, freq) {
+  var f = freq || 'd';
+  if (state.source === 'ths' && !isHK(sym) && f === 'd') {
     var u1 = 'https://d.10jqka.com.cn/v6/line/' + thsCode(sym) + '/01/last.js';
     var g = 'quotebridge_v6_line_' + thsCode(sym) + '_01_last';
     return thsCall(u1, g, 9000).then(function (box) {
@@ -652,11 +710,11 @@ function fetchDaily(sym, days) {
     });
   }
   var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + emSecid(sym) +
-            '&klt=101&fqt=1&lmt=' + (days || 120) + '&end=20500101' +
+            '&klt=' + KL_KLT[f] + '&fqt=1&lmt=' + (days || 120) + '&end=20500101' +
             '&fields1=f1,f2,f3,f4,f5&fields2=f51,f52,f53,f54,f55,f56,f57';
-  return jsonp(url, 'kl' + sym.replace(/\W/g, ''), 9000).then(function (j) {
+  return jsonp(url, 'kl' + f + sym.replace(/\W/g, ''), 9000).then(function (j) {
     var k = j && j.data && j.data.klines;
-    if (!k) throw new Error('日 K 取不到');
+    if (!k) throw new Error(KL_CN[f] + '取不到');
     return k.map(function (l) {
       var p = l.split(',');
       return {d: p[0], o: num(p[1]), c: num(p[2]), h: num(p[3]), l: num(p[4]), v: num(p[5]), a: num(p[6])};
@@ -735,6 +793,13 @@ function mountChart(cv, spec) {
       var span = Math.max(hi - pre, pre - lo) || pre * 0.01;
       hi = pre + span; lo = pre - span;
     }
+    if (spec.type === 'bar') {
+      /* 分钟买卖量柱：lo 固定 0，hi = 最大合计 */
+      hi = 0;
+      view.forEach(function (r) { hi = Math.max(hi, (r.buy || 0) + (r.sell || 0) + (r.neutral || 0)); });
+      lo = 0;
+      vmax = hi;
+    }
     mas.forEach(function (m) {
       for (var i = st.i0; i < st.i1; i++) {
         var v = m.v[i];
@@ -757,6 +822,20 @@ function mountChart(cv, spec) {
     }
     view.forEach(function (r, k) {
       var x = k * step + step / 2;
+      if (spec.type === 'bar') {
+        /* 买(红)叠卖(绿)叠中性(灰)，同一分钟一根柱 */
+        var segs = [['buy', '#ff5252'], ['sell', '#22c07a'], ['neutral', '#5c6f8e']];
+        var yBase = H - padB;
+        segs.forEach(function (sg) {
+          var v = r[sg[0]] || 0;
+          if (v <= 0) return;
+          var hgt = v / (hi || 1) * priceH;
+          ctx.fillStyle = sg[1];
+          ctx.fillRect(k * step, yBase - hgt, Math.max(1, step * .8), hgt);
+          yBase -= hgt;
+        });
+        return;
+      }
       var vh = (r.v || r.vol || 0) / (vmax || 1) * volH;
       ctx.globalAlpha = .55;
       ctx.fillStyle = (r.c != null ? (r.c >= r.o ? '#ff5252' : '#22c07a')
@@ -816,9 +895,13 @@ function mountChart(cv, spec) {
 
   cv._chart = st;
   cv._setWin = setWin;
-  st.setWin = setWin;          // 读数条上的缩小/放大/复位按钮要用
+  st.setWin = setWin;
+  st.draw = draw;              // 手势监听只绑一次（见 bindGestures），经 cv._chart 动态取当前状态
   state.charts[key] = st;
-  bindGestures(cv, st, pick, setWin, draw);
+  if (!cv._gesturesBound) {    // 反复 mountChart 不再叠加监听（越用越卡的根因）
+    bindGestures(cv);
+    cv._gesturesBound = true;
+  }
   draw();
   return st;
 }
@@ -829,9 +912,13 @@ function readout(st, mas) {
   if (!r) { st.read.textContent = ''; st.read.style.display = 'none'; return; }
   st.read.style.display = 'block';
   var pre = st.spec.pre || r.prev || null;
-  var pct = pre ? (r.c != null ? r.c : r.price) / pre * 100 - 100 : null;
+  var pct = pre ? ((r.c != null ? r.c : r.price) / pre * 100 - 100) : null;
   var parts = [];
-  if (st.spec.type === 'k') {
+  if (st.spec.type === 'bar') {
+    parts.push('<b>' + r.t + '</b>　买 <b class="up">' + fmtVol(r.buy, st.spec.volUnit || '手') +
+      '</b>　卖 <b class="down">' + fmtVol(r.sell, st.spec.volUnit || '手') +
+      '</b>　中性 ' + fmtVol(r.neutral, st.spec.volUnit || '手'));
+  } else if (st.spec.type === 'k') {
     parts.push('<b>' + r.d + '</b>　开 ' + fx(r.o) + '　高 ' + fx(r.h) + '　低 ' + fx(r.l) +
       '　收 <b class="' + cls(pct) + '">' + fx(r.c) + '</b>');
     if (pct != null) parts.push('涨跌 <span class="' + cls(pct) + '">' + (pct > 0 ? '+' : '') +
@@ -843,8 +930,7 @@ function readout(st, mas) {
     });
     if (line.length) parts.push(line.join('　'));
   } else {
-    parts.push('<b>' + r.t + '</b>　价 <b>' + fx(r.price) + '</b>　均价 ' +
-      (r.avg ? fx(r.avg) : '—'));
+    parts.push('<b>' + r.t + '</b>　价 <b>' + fx(r.price) + '</b>　均价 ' + (r.avg ? fx(r.avg) : '—'));
     if (pct != null) parts.push('较昨收 <span class="' + cls(pct) + '">' + (pct > 0 ? '+' : '') +
       pct.toFixed(2) + '%</span>　这一分钟 ' + fmtVol(r.vol, st.spec.volUnit || '手'));
   }
@@ -870,70 +956,80 @@ document.addEventListener('click', function (e) {
   st.setWin(center - Math.round(w / 2), center - Math.round(w / 2) + w);
 });
 
-function bindGestures(cv, st, pick, setWin, draw) {
+function bindGestures(cv) {
+  /* 每个画布只绑一次；st 从 cv._chart 动态取——图表数据重挂后监听仍指向当前状态 */
   var g = {mode: null, x0: 0, d0: 0, i0: 0, i1: 0, moved: 0, t0: 0};
   function dist(t) {
     var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
     return Math.hypot(dx, dy);
   }
   cv.addEventListener('touchstart', function (e) {
+    var st = cv._chart; if (!st) return;
     var t = e.touches;
     g.t0 = Date.now(); g.moved = 0;
     if (t.length >= 2) { g.mode = 'zoom'; g.d0 = dist(t); g.i0 = st.i0; g.i1 = st.i1; }
     else { g.mode = 'pan'; g.x0 = t[0].clientX; g.i0 = st.i0; g.i1 = st.i1; }
   }, {passive: true});
   cv.addEventListener('touchmove', function (e) {
+    var st = cv._chart; if (!st) return;
     var t = e.touches, W = cv.clientWidth || 320, n = g.i1 - g.i0, step = W / n;
     if (g.mode === 'zoom' && t.length >= 2) {
       var d = dist(t);
       if (d > 0 && g.d0 > 0) {
         var w = Math.round(n * g.d0 / d);
         var center = Math.round((g.i0 + g.i1) / 2);
-        setWin(center - Math.round(w / 2), center - Math.round(w / 2) + w);
+        st.setWin(center - Math.round(w / 2), center - Math.round(w / 2) + w);
       }
       e.preventDefault();
     } else if (t.length === 1) {
       var dx = t[0].clientX - g.x0;
       g.moved = Math.max(g.moved, Math.abs(dx));
       if (g.moved > 8) {
-        setWin(g.i0 + Math.round(-dx / step), g.i1 + Math.round(-dx / step));
+        st.setWin(g.i0 + Math.round(-dx / step), g.i1 + Math.round(-dx / step));
         e.preventDefault();
       }
     }
   }, {passive: false});
   cv.addEventListener('touchend', function (e) {
+    var st = cv._chart; if (!st) return;
     if (g.mode === 'pan' && g.moved <= 8 && Date.now() - g.t0 < 600) {
       var t = e.changedTouches[0], rect = cv.getBoundingClientRect();
-      st.sel = pick(t.clientX - rect.left, cv.clientWidth || 320);
-      draw();
+      st.sel = Math.max(st.i0, Math.min(st.i1 - 1,
+        st.i0 + Math.floor((t.clientX - rect.left) / ((cv.clientWidth || 320) / (st.i1 - st.i0)))));
+      st.draw();
     }
     g.mode = null;
   });
   cv.addEventListener('mousedown', function (e) {
+    var st = cv._chart; if (!st) return;
     g.mode = 'pan'; g.x0 = e.clientX; g.i0 = st.i0; g.i1 = st.i1; g.moved = 0;
   });
   cv.addEventListener('mousemove', function (e) {
-    if (g.mode !== 'pan') return;
+    var st = cv._chart; if (!st || g.mode !== 'pan') return;
     var W = cv.clientWidth || 320, step = W / (g.i1 - g.i0);
     var dx = e.clientX - g.x0;
     g.moved = Math.max(g.moved, Math.abs(dx));
-    if (g.moved > 4) setWin(g.i0 + Math.round(-dx / step), g.i1 + Math.round(-dx / step));
+    if (g.moved > 4) st.setWin(g.i0 + Math.round(-dx / step), g.i1 + Math.round(-dx / step));
   });
   window.addEventListener('mouseup', function (e) {
+    var st = cv._chart; if (!st) return;
     if (g.mode === 'pan' && g.moved <= 4) {
       var rect = cv.getBoundingClientRect();
-      st.sel = pick(e.clientX - rect.left, cv.clientWidth || 320);
-      draw();
+      st.sel = Math.max(st.i0, Math.min(st.i1 - 1,
+        st.i0 + Math.floor((e.clientX - rect.left) / ((cv.clientWidth || 320) / (st.i1 - st.i0)))));
+      st.draw();
     }
     g.mode = null;
   });
   cv.addEventListener('wheel', function (e) {
+    var st = cv._chart; if (!st) return;
     e.preventDefault();
     var n = st.i1 - st.i0, w = Math.round(n * (e.deltaY > 0 ? 1.15 : 0.87));
-    var at = pick(e.offsetX, cv.clientWidth || 320);
+    var at = Math.max(st.i0, Math.min(st.i1 - 1,
+      st.i0 + Math.floor(e.offsetX / ((cv.clientWidth || 320) / n))));
     var left = (at - st.i0) / n;
     var i0 = Math.round(at - w * left);
-    setWin(i0, i0 + w);
+    st.setWin(i0, i0 + w);
   }, {passive: false});
 }
 
@@ -1134,11 +1230,39 @@ function renderTop() {
 /* ---------------- 渲染：自选列表（大字卡） ---------------- */
 
 var _listSig = '';
+var _sig = {};
+function changed(key, sig) { if (_sig[key] === sig) return false; _sig[key] = sig; return true; }
+var SORTS = [['default', '默认'], ['pct', '涨幅'], ['amount', '成交额']];
 function renderList() {
   var host = document.getElementById('list'), html = [];
+  var sortBar = document.getElementById('sortBar');
+  if (sortBar && !sortBar.childNodes.length) {
+    sortBar.innerHTML = SORTS.map(function (p) {
+      return '<button class="chip' + (state.sortMode === p[0] ? ' on' : '') + '" data-sort="' + p[0] + '">' +
+        p[1] + '</button>';
+    }).join('');
+    Array.prototype.forEach.call(sortBar.querySelectorAll('[data-sort]'), function (b) {
+      b.addEventListener('click', function () {
+        state.sortMode = b.getAttribute('data-sort');
+        localStorage.setItem('qd.sort', state.sortMode);
+        _listSig = '';
+        renderList();
+      });
+    });
+  } else if (sortBar) {
+    Array.prototype.forEach.call(sortBar.querySelectorAll('[data-sort]'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-sort') === state.sortMode);
+    });
+  }
+  var pool = state.pool.slice();
+  if (state.sortMode === 'pct') {
+    pool.sort(function (a, b) { return (state.rows[b] && state.rows[b].pct || -999) - (state.rows[a] && state.rows[a].pct || -999); });
+  } else if (state.sortMode === 'amount') {
+    pool.sort(function (a, b) { return ((state.rows[b] && state.rows[b].amount) || 0) - ((state.rows[a] && state.rows[a].amount) || 0); });
+  }
   /* 极速轮询下每秒重画会把用户正在点的按钮换掉（点按丢失/滚动跳位）——
      数据签名没变就一个字节都不动；变了才重建并保住滚动位置 */
-  var sig = state.pool.join(',') + '|' + state.source + '|' + JSON.stringify(
+  var sig = state.sortMode + '|' + state.pool.join(',') + '|' + state.source + '|' + JSON.stringify(
     state.pool.map(function (s) {
       var r = state.rows[s];
       return r ? [r.last, r.pct, r.open, r.high, r.low, r.volume, r.amount,
@@ -1148,7 +1272,7 @@ function renderList() {
   _listSig = sig;
   var scroller = host.parentNode;
   var keepScroll = scroller ? scroller.scrollTop : 0;
-  state.pool.forEach(function (sym) {
+  pool.forEach(function (sym) {
     var r = state.rows[sym];
     var known = nameOf(sym);
     if (!r) {
@@ -1204,6 +1328,7 @@ document.getElementById('list').addEventListener('click', function (e) {
 
 function renderSymbar() {
   var host = document.getElementById('symbar');
+  if (!changed('symbar', state.pool.join(',') + '|' + state.sel)) return;
   if (!state.pool.length) { host.innerHTML = '<span class="chip">自选是空的</span>'; return; }
   if (!state.sel || state.pool.indexOf(state.sel) < 0) state.sel = state.pool[0];
   host.innerHTML = state.pool.map(function (s) {
@@ -1221,6 +1346,7 @@ function renderSymbar() {
 
 function renderChartHead(sym) {
   var r = state.rows[sym] || {};
+  if (!changed('head-' + sym, JSON.stringify([r.last, r.pct, r.name, r.quote_time, r.prev_close]))) return;
   var nm = nameOf(sym, r) || sym;
   var pct = r.pct, chg = pct == null ? null : (r.last - r.prev_close);
   var digits = isHK(sym) ? 3 : 2;
@@ -1235,6 +1361,7 @@ function renderChartHead(sym) {
 
 function renderBook(sym) {
   var r = state.rows[sym] || {};
+  if (!changed('book-' + sym, JSON.stringify([r.bids, r.asks, r.limit_up, r.limit_down, r.wk52]))) return;
   var host = document.getElementById('book');
   if (!r.asks || !r.asks.length) {
     host.innerHTML = '<div class="note" style="margin:0">当前来源不提供五档档位，切到「腾讯行情」可看五档。</div>';
@@ -1258,49 +1385,213 @@ function renderBook(sym) {
   host.innerHTML = html;
 }
 
-function renderFlow(sym) {
-  var host = document.getElementById('flow');
-  fetchTicks(sym).then(function (rows) {
-    if (state.tab !== 'chart' || state.sel !== sym) return;
-    var lay = layerTicks(rows, sym), total = 0, buy = 0;
-    Object.keys(lay).forEach(function (k) { total += lay[k].buy + lay[k].sell; buy += lay[k].buy; });
-    var html = '<table><thead><tr><th>档位</th><th>买量(股)</th><th>卖量(股)</th><th>买额</th><th>卖额</th><th>笔数</th></tr></thead><tbody>';
-    ['特大单', '大单', '中单', '小单'].forEach(function (k) {
-      var a = lay[k];
-      html += '<tr><td>' + k + '</td><td class="up">' + fmtVol(a.buy, '') + '</td><td class="down">' +
-        fmtVol(a.sell, '') + '</td><td>' + fmtAmt(a.buyAmt) + '</td><td>' + fmtAmt(a.sellAmt) +
-        '</td><td>' + a.cnt + '</td></tr>';
+/* 方向码校准（与电脑端同一算法）：用官方外盘/内盘反推 1/2 谁是买，误差过大就不声称校准 */
+function calibrateSideMap(rows, outer, inner, total) {
+  var def = {1: 'sell', 2: 'buy', 4: 'neutral'};
+  if (!rows.length || outer == null || inner == null || !(total > 0)) return {map: def, ok: false};
+  var by = {};
+  rows.forEach(function (r) { by[r.code] = (by[r.code] || 0) + r.vol; });
+  var codes = Object.keys(by).filter(function (c) { return c === '1' || c === '2'; }).sort();
+  if (codes.length < 2) return {map: def, ok: false};
+  var a = codes[0], b = codes[1];
+  function obj(x, xb, y, yb) { var m = {4: 'neutral'}; m[x] = xb; m[y] = yb; return m; }
+  function err(m) {
+    var buy = 0, sell = 0;
+    Object.keys(by).forEach(function (c) {
+      if (m[c] === 'buy') buy += by[c]; else if (m[c] === 'sell') sell += by[c];
     });
-    html += '</tbody></table><div class="note" style="margin:8px 2px 0">逐笔合计 ' + fmtVol(total, '股') +
-      (buy && total ? '，主动买 ' + (buy / total * 100).toFixed(1) + '%' : '') + '</div>';
-    host.innerHTML = html;
-  }).catch(function (e) {
-    if (state.tab === 'chart' && state.sel === sym)
-      host.innerHTML = '<div class="note" style="margin:0">' + esc(e.message) + '</div>';
-  });
+    return Math.abs(buy - outer) + Math.abs(sell - inner);
+  }
+  var ea = err(obj(a, 'buy', b, 'sell')), eb = err(obj(a, 'sell', b, 'buy'));
+  var best = Math.min(ea, eb), worst = Math.max(ea, eb);
+  var ok = worst > 0 && best / Math.max(worst, 1) < 0.6 && best / total < 0.08;
+  return {map: ea <= eb ? obj(a, 'buy', b, 'sell') : obj(a, 'sell', b, 'buy'), ok: ok};
 }
 
-function loadChartTab(sym, manual) {
-  renderSymbar();
-  renderChartHead(sym);
-  renderBook(sym);
-  renderFlow(sym);   // 逐笔自带 20s 缓存，随刷新走没问题
-  /* 分时/日K 是重请求：极速轮询下每秒打一次会把本机打进对方冷却——
-     手动刷新立即重取，自动路径同一标的 10 秒只取一次 */
-  var last = state.chartAt[sym] || 0;
-  if (!manual && Date.now() - last < 10000) return;
-  state.chartAt[sym] = Date.now();
-  var tsCv = document.getElementById('cv-ts'), klCv = document.getElementById('cv-kl');
-  var r = state.rows[sym] || {};
-  fetchTimeShare(sym).then(function (d) {
-    if (state.tab !== 'chart' || state.sel !== sym) return;
-    mountChart(tsCv, {key: 'ts', type: 'ts', rows: d.rows, pre: d.pre, height: 230,
-                      volUnit: r.volume_unit || '手'});
-  }).catch(function (e) {
-    if (state.tab === 'chart' && state.sel === sym) drawEmpty(tsCv, 230, e.message);
+function minuteBars(rows) {
+  var acc = {}, order = [];
+  rows.forEach(function (r) {
+    var t = r.t.slice(0, 5);
+    if (!acc[t]) { acc[t] = {t: t, buy: 0, sell: 0, neutral: 0}; order.push(t); }
+    var side = state.calib.map[r.code] || 'neutral';
+    acc[t][side === 'buy' ? 'buy' : side === 'sell' ? 'sell' : 'neutral'] += r.vol;
   });
-  fetchDaily(sym, 120).then(function (rows) {
+  return order.map(function (t) { return acc[t]; });
+}
+
+function renderMetrics(sym) {
+  var r = state.rows[sym] || {};
+  var x = (state.emExtra[sym] || {}).data || {};
+  if (!changed('mx-' + sym, JSON.stringify([x, r.avg]))) return;
+  var digits = isHK(sym) ? 3 : 2;
+  function cell(label, v, suffix) {
+    return '<span>' + label + '<b>' + (v == null ? '—' : Number(v).toFixed(digits === 3 ? 3 : 2) + (suffix || '')) + '</b></span>';
+  }
+  document.getElementById('metrics').innerHTML =
+    cell('换手率', x.turnover, '%') + cell('振幅', x.amplitude, '%') +
+    cell('量比', x.volratio) + cell('均价', r.avg || x.avg) +
+    cell('市盈(动)', x.pe) + cell('市净', x.pb);
+}
+
+function renderFlowOv(sym) {
+  var r = state.rows[sym] || {};
+  var acc = state.flowAcc[sym] || {};
+  if (!changed('ov-' + sym, JSON.stringify([r.outer, r.inner, r.volume, acc]))) return;
+  var unit = r.volume_unit || '手';
+  var mul = isHK(sym) ? 1 : 100;
+  var official = r.volume ? r.volume * mul : null;
+  var pct = r.outer != null && r.volume > 0 ? r.outer / r.volume * 100 : null;
+  var net = acc.sellAmt != null ? acc.buyAmt - acc.sellAmt : null;
+  var diff = acc.total && official ? (acc.total / official - 1) * 100 : null;
+  document.getElementById('flowOv').innerHTML =
+    '<div class="g">' +
+    '<span class="w2">外盘·主动买<b class="up">' + (r.outer == null ? '—' : fmtVol(r.outer, unit)) + '</b></span>' +
+    '<span class="w2">内盘·主动卖<b class="down">' + (r.inner == null ? '—' : fmtVol(r.inner, unit)) + '</b></span>' +
+    '<span class="w2">主动买占比<b>' + (pct == null ? '—' : pct.toFixed(1) + '%') + '</b></span>' +
+    '<span class="w2">逐笔净额<b class="' + cls(net) + '">' + (net == null ? '—' : fmtAmt(net) + ' 元') + '</b></span>' +
+    '</div>' +
+    (diff == null ? '' : '<div class="note" style="margin:8px 2px 0">逐笔合计 ' + fmtVol(acc.total, '股') +
+      '，与官方总量差 ' + (diff > 0 ? '+' : '') + diff.toFixed(2) + '%（含盘后成交）</div>');
+  document.getElementById('calibTag').textContent =
+    state.calib.ok ? '买卖方向已与官方核对' : '买卖方向未核对';
+}
+
+function renderTicks(sym, rows) {
+  var host = document.getElementById('ticks');
+  var PAGE = 50;
+  var view = rows.filter(function (r) {
+    var d = state.calib.map[r.code] || 'neutral';
+    return !state.tickView.side || d === state.tickView.side;
+  });
+  var total = view.length;
+  var off = Math.max(0, Math.min(state.tickView.offset, Math.max(0, total - PAGE)));
+  state.tickView.offset = off;
+  var page = view.slice().reverse().slice(off, off + PAGE);   // 最新在前
+  var html = '<table><thead><tr><th>时间</th><th>价格</th><th>量(股)</th><th>成交额</th><th>方向</th></tr></thead><tbody>';
+  if (!page.length) html += '<tr><td colspan="5" style="text-align:center;color:var(--muted)">无记录</td></tr>';
+  page.forEach(function (r) {
+    var amount = r.price * r.vol * (isHK(sym) ? 1 : 100);
+    var d = state.calib.map[r.code] || 'neutral';
+    html += '<tr><td>' + r.t + '</td><td>' + fx(r.price) + '</td><td>' + Math.round(r.vol) +
+      '</td><td>' + fmtAmt(amount) + '</td><td class="' +
+      (d === 'buy' ? 'up' : d === 'sell' ? 'down' : '') + '">' +
+      (d === 'buy' ? '买' : d === 'sell' ? '卖' : '中性') + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  host.innerHTML = html;
+  document.getElementById('tickCount').textContent = '共 ' + rows.length + ' 笔';
+  var pages = Math.max(1, Math.ceil(total / PAGE));
+  document.getElementById('tickPage').innerHTML =
+    '<button id="tkPrev"' + (off <= 0 ? ' disabled' : '') + '>上一页</button>' +
+    '<span>' + (Math.floor(off / PAGE) + 1) + '/' + pages + ' 页 · ' + total + ' 笔</span>' +
+    '<button id="tkNext"' + (off + PAGE >= total ? ' disabled' : '') + '>下一页</button>';
+  document.getElementById('tkPrev').addEventListener('click', function () {
+    state.tickView.offset = Math.max(0, state.tickView.offset - PAGE); renderTicks(sym, rows);
+  });
+  document.getElementById('tkNext').addEventListener('click', function () {
+    state.tickView.offset = state.tickView.offset + PAGE; renderTicks(sym, rows);
+  });
+  var tabs = document.getElementById('tickTabs');
+  if (!tabs.childNodes.length) {
+    tabs.innerHTML = [['', '全部'], ['buy', '买'], ['sell', '卖'], ['neutral', '中性']].map(function (p) {
+      return '<button data-tside="' + p[0] + '">' + p[1] + '</button>';
+    }).join('');
+    Array.prototype.forEach.call(tabs.querySelectorAll('[data-tside]'), function (b) {
+      b.addEventListener('click', function () {
+        state.tickView = {side: b.getAttribute('data-tside'), offset: 0};
+        fetchTicks(sym).then(function (rs) { if (state.sel === sym) renderTicks(sym, rs); }).catch(function () {});
+        Array.prototype.forEach.call(tabs.querySelectorAll('button'), function (x) {
+          x.classList.toggle('on', x === b);
+        });
+      });
+    });
+  }
+}
+
+function renderFlowAll(sym, rows) {
+  if (state.tab !== 'chart' || state.sel !== sym) return;
+  var rowsSig = rows.length + '|' + (rows.length ? rows[rows.length - 1].t + rows[rows.length - 1].price + rows[rows.length - 1].vol : '');
+  var calibKey = 'flow-' + sym + '|' + state.tickView.side;
+  if (!changed(calibKey, rowsSig)) return;
+  var r = state.rows[sym] || {};
+  var today = new Date();
+  var d8 = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+  if (state.calib.date !== d8) state.calib = {date: d8, map: {1: 'sell', 2: 'buy', 4: 'neutral'}, ok: false};
+  var res = calibrateSideMap(rows, r.outer, r.inner, r.volume);
+  state.calib.map = res.map; state.calib.ok = res.ok;
+
+  var mul = isHK(sym) ? 1 : 100;
+  var lay = layerTicks(rows, sym, res.map), total = 0, buy = 0, buyAmt = 0, sellAmt = 0;
+  Object.keys(lay).forEach(function (k) {
+    total += lay[k].buy + lay[k].sell + (lay[k].neutral || 0); buy += lay[k].buy;
+    buyAmt += lay[k].buyAmt; sellAmt += lay[k].sellAmt;
+  });
+  state.flowAcc[sym] = {total: total, buyAmt: buyAmt, sellAmt: sellAmt};
+
+  var host = document.getElementById('flow');
+  var html = '<table><thead><tr><th>档位</th><th>买量(股)</th><th>卖量(股)</th><th>买额</th><th>卖额</th><th>笔数</th></tr></thead><tbody>';
+  ['特大单', '大单', '中单', '小单'].forEach(function (k) {
+    var a = lay[k];
+    html += '<tr><td>' + k + '</td><td class="up">' + fmtVol(a.buy, '') + '</td><td class="down">' +
+      fmtVol(a.sell, '') + '</td><td>' + fmtAmt(a.buyAmt) + '</td><td>' + fmtAmt(a.sellAmt) +
+      '</td><td>' + a.cnt + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  host.innerHTML = html;
+
+  renderFlowOv(sym);
+  var mb = minuteBars(rows);
+  document.getElementById('tsVolUnit').textContent = '量单位 ' + (r.volume_unit || '手');
+  mountChart(document.getElementById('cv-tsv'), {key: 'tsv', type: 'bar', rows: mb, height: 150,
+                                                 volUnit: r.volume_unit || '手'});
+  renderTicks(sym, rows);
+}
+
+function renderKlTabs() {
+  var fq = document.getElementById('klFreqTabs');
+  if (!fq.childNodes.length) {
+    fq.innerHTML = [['d', '日'], ['w', '周'], ['m', '月']].map(function (p) {
+      return '<button data-klf="' + p[0] + '"' + (state.klFreq === p[0] ? ' class="on"' : '') + '>' + p[1] + '</button>';
+    }).join('');
+    Array.prototype.forEach.call(fq.querySelectorAll('[data-klf]'), function (b) {
+      b.addEventListener('click', function () {
+        state.klFreq = b.getAttribute('data-klf');
+        Array.prototype.forEach.call(fq.querySelectorAll('button'), function (x) {
+          x.classList.toggle('on', x === b);
+        });
+        loadKline(state.sel, true);
+      });
+    });
+    var fd = document.getElementById('klDayTabs');
+    fd.innerHTML = [120, 250, 500].map(function (n) {
+      return '<button data-kld="' + n + '"' + (state.klDays === n ? ' class="on"' : '') + '>' + n + '</button>';
+    }).join('');
+    Array.prototype.forEach.call(fd.querySelectorAll('[data-kld]'), function (b) {
+      b.addEventListener('click', function () {
+        state.klDays = +b.getAttribute('data-kld');
+        Array.prototype.forEach.call(fd.querySelectorAll('button'), function (x) {
+          x.classList.toggle('on', x === b);
+        });
+        loadKline(state.sel, true);
+      });
+    });
+  } else {
+    Array.prototype.forEach.call(fq.querySelectorAll('[data-klf]'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-klf') === state.klFreq);
+    });
+  }
+}
+
+function loadKline(sym, manual) {
+  var last = state.klAt && state.klAt[sym + state.klFreq + state.klDays] || 0;
+  if (!manual && Date.now() - last < 60000) return;
+  state.klAt = state.klAt || {};
+  state.klAt[sym + state.klFreq + state.klDays] = Date.now();
+  var klCv = document.getElementById('cv-kl');
+  var r = state.rows[sym] || {};
+  fetchDaily(sym, state.klDays, state.klFreq).then(function (rows) {
     if (state.tab !== 'chart' || state.sel !== sym) return;
+    document.getElementById('klTitle').textContent = KL_CN[state.klFreq];
     document.getElementById('maLegend').innerHTML =
       MA_C.map(function (c, i) { return '<span class="ma ma' + i + '">MA' + MA_DAYS[i] + '</span>'; }).join(' ');
     mountChart(klCv, {key: 'kl', type: 'k', rows: rows, height: 300,
@@ -1308,6 +1599,46 @@ function loadChartTab(sym, manual) {
   }).catch(function (e) {
     if (state.tab === 'chart' && state.sel === sym) drawEmpty(klCv, 300, e.message);
   });
+}
+
+function loadChartTab(sym, manual) {
+  renderSymbar();
+  renderChartHead(sym);
+  renderBook(sym);
+  renderMetrics(sym);
+  renderKlTabs();
+  if (state.tickFor !== sym) {
+    state.tickFor = sym;
+    state.tickView = {side: '', offset: 0};
+  }
+  fetchEmExtra(sym).then(function () {
+    if (state.sel === sym && state.tab === 'chart') renderMetrics(sym);
+  }).catch(function () {});
+  fetchTicks(sym).then(function (rows) {
+    if (state.sel !== sym) return;
+    renderFlowAll(sym, rows);
+  }).catch(function (e) {
+    if (state.tab === 'chart' && state.sel === sym) {
+      document.getElementById('flow').innerHTML =
+        '<div class="note" style="margin:0">' + esc(e.message) + '</div>';
+      document.getElementById('calibTag').textContent = '买卖方向未核对';
+    }
+  });
+  /* 分时是重请求：手动立即取，自动路径同一标的 10 秒只取一次 */
+  var last = state.chartAt[sym] || 0;
+  if (manual || Date.now() - last >= 10000) {
+    state.chartAt[sym] = Date.now();
+    var tsCv = document.getElementById('cv-ts');
+    var r = state.rows[sym] || {};
+    fetchTimeShare(sym).then(function (d) {
+      if (state.tab !== 'chart' || state.sel !== sym) return;
+      mountChart(tsCv, {key: 'ts', type: 'ts', rows: d.rows, pre: d.pre, height: 230,
+                        volUnit: r.volume_unit || '手'});
+    }).catch(function (e) {
+      if (state.tab === 'chart' && state.sel === sym) drawEmpty(tsCv, 230, e.message);
+    });
+  }
+  loadKline(sym, manual);
 }
 
 /* ---------------- 渲染：连接页 ---------------- */
@@ -1339,6 +1670,37 @@ function renderConnect() {
   });
   renderPool();
   renderLinks();
+  renderInterval();
+}
+
+/* 刷新节奏：关 / 极速 1 秒 / 3 / 5 / 10 / 30 秒；低于当前源下限时自动钳到下限 */
+var IV_OPTIONS = [0, 1, 3, 5, 10, 30];
+function renderInterval() {
+  var host = document.getElementById('ivList');
+  if (!host) return;
+  var minIv = SRC_MIN_IV[state.source] || 1;
+  host.innerHTML = IV_OPTIONS.map(function (n) {
+    var label = n === 0 ? '关' : n === 1 ? '极速 1 秒' : n + ' 秒';
+    return '<button class="mini' + (state.interval === n ? ' on' : '') +
+      '" data-iv="' + n + '">' + label + '</button>';
+  }).join('');
+  Array.prototype.forEach.call(host.querySelectorAll('[data-iv]'), function (b) {
+    b.addEventListener('click', function () {
+      var n = +b.getAttribute('data-iv');
+      if (n > 0 && n < minIv) {
+        setConnMsg(SRC_NAME[state.source] + ' 最快 ' + minIv + ' 秒一档，已按此调整');
+        n = minIv;
+      } else {
+        setConnMsg(n === 0 ? '已关闭自动刷新（休市时本来也不会外呼）' : '自动刷新：' + (n === 1 ? '极速 1 秒' : n + ' 秒'));
+      }
+      state.interval = n;
+      localStorage.setItem(LS.iv, String(n));
+      restartTimer();
+      renderInterval();
+    });
+  });
+  var cur = document.getElementById('ivCur');
+  if (cur) cur.textContent = state.interval === 0 ? '已关' : (state.interval === 1 ? '极速 1 秒' : state.interval + ' 秒');
 }
 
 function probeSource(s) {
@@ -1434,8 +1796,8 @@ function refreshAll(manual) {
 
 function restartTimer() {
   if (state.timer) clearInterval(state.timer);
+  if (state.interval === 0) return;               // 用户明确关掉：一颗请求都不发
   var iv = Math.max(state.interval, SRC_MIN_IV[state.source] || 1);
-  if (iv <= 0) return;
   state.timer = setInterval(function () {
     var mc = marketClock();
     if (mc.cn !== 'open' && mc.hk !== 'open') { renderTop(); return; }
