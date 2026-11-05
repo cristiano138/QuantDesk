@@ -10,6 +10,19 @@ Windows 本地 A 股量化交易工作台（Python 3.11+ · FastAPI · React + T
 配「新手指引」术语模块）——这条链路不需要任何券商权限，装完就能看真实数据。
 项目宪法见 [AGENTS.md](AGENTS.md)；工程方案与决策见 [docs/商业落地工程方案.md](docs/商业落地工程方案.md)。
 
+## 下载（不写代码也能拿走的部分）
+
+发布页：**<https://github.com/cristiano138/QuantDesk/releases/tag/app-1.0>**
+
+| 文件 | 给谁 | 怎么用 |
+| --- | --- | --- |
+| [`QuantDesk-Android-1.0.apk`](https://github.com/cristiano138/QuantDesk/releases/download/app-1.0/QuantDesk-Android-1.0.apk) | 安卓手机 | 传到手机点开安装 → 允许一次「未知来源」→ 桌面出现「QuantDesk 看盘」。不依赖电脑、不依赖自建服务器，全程只读 |
+| [`QuantDesk-iPhone.html`](https://github.com/cristiano138/QuantDesk/releases/download/app-1.0/QuantDesk-iPhone.html) | iPhone | iOS 不认无 Apple 签名的包，所以只能 Safari 打开 → 分享 → 「添加到主屏幕」 |
+| [`QuantDesk-PC-Windows.zip`](https://github.com/cristiano138/QuantDesk/releases/download/app-1.0/QuantDesk-PC-Windows.zip) | Windows | 里面是 `QuantDesk-安装程序.exe`（装图标 + 「设置→应用」登记）与 `QuantDesk.exe`（打开原生窗口）。**需要与源码同机使用**：先 clone 本仓库、`uv sync`、构建 `frontend/dist`，把两个 exe 放进仓库的 `QuantDesk-App` 目录——电脑端不是把解释器打包进去的独立大包装，包内 `电脑端先看这里.txt` 写清了步骤 |
+
+两端 App 的安装细节、以及同花顺 / 南京证券这类券商软件的真实接入边界，写在
+[QuantDesk-App/使用说明.txt](QuantDesk-App/使用说明.txt)；界面里的「使用手册」也有同名章节。
+
 ## 快速开始
 
 ```bash
