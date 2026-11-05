@@ -133,6 +133,21 @@ namespace QuantDesk.Watch
                 return 0;
             }
 
+            // 探到过不等于现在还在：起窗口前再确认一次，刚掉线就补一次启动，
+            // 否则开出来的是「软件暂时打不开」的空壳窗口。
+            if (!Probe(1200))
+            {
+                Form again = ShowSplash("行情服务掉线了，正在重新拉起…");
+                bool revived = StartBackend(root) && WaitUntilReady(again, 90);
+                CloseSplash(again);
+                if (!revived)
+                {
+                    Notify(AppDisplayName,
+                        "行情服务在启动过程中掉了一次。请再双击一次桌面图标。", true);
+                    return 1;
+                }
+            }
+
             Process shell = StartShell(root);
             if (shell == null)
             {
@@ -220,17 +235,22 @@ namespace QuantDesk.Watch
             return Process.Start(psi);
         }
 
-        /// <summary>优先用软件目录自带的 Python，其次用系统里的 pythonw。</summary>
+        /// <summary>
+        /// 优先用软件目录自带的 Python，其次用系统里的 python.exe。
+        /// 必须是 python.exe 而不是 pythonw.exe：uvicorn 建日志器时无条件读
+        /// sys.stdout.isatty()，pythonw 的 sys.stdout 是 None，后端会在启动第一行就
+        /// 抛 ValueError 直接退出。窗口不显示靠 CreateNoWindow，不靠换解释器。
+        /// </summary>
         private static void Runtime(string root, out string file, out string prefix)
         {
-            string venv = Path.Combine(root, ".venv", "Scripts", "pythonw.exe");
+            string venv = Path.Combine(root, ".venv", "Scripts", "python.exe");
             if (File.Exists(venv))
             {
                 file = venv;
                 prefix = "";
                 return;
             }
-            string py = OnPath("pythonw.exe");
+            string py = OnPath("python.exe");
             if (py != null)
             {
                 file = py;

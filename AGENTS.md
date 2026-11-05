@@ -300,6 +300,11 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
   `EnclosingMethod` 描述符为空 → d8 直接 NPE，Android 外壳一律用**具名嵌套类**；
   ② `aapt2 link --no-compress` 是布尔开关，按后缀免压缩要用 `-0 arsc`，且
   `resources.arsc` 必须 STORED（targetSdk≥30 的安装判据）。
+- **冷启动实测又翻出一处真缺陷（已修）**：启动器原本用 `pythonw.exe -m quantdesk.app`，
+  子进程秒退——`uvicorn/logging.py:42` 无条件 `sys.stdout.isatty()`，而 pythonw 的
+  `sys.stdout` 是 None → `ValueError: Unable to configure formatter 'default'`。
+  **这个后端只能用 `python.exe` 起**（黑框靠 CreateNoWindow 隐藏，不靠换解释器）；
+  `启动.bat` 一直用 python 正是同一约束。教训：GUI 启动器必须实测「什么都不在跑」那条分支。
 - 顺带修掉两处「看起来一切正常」：桌面窗口标题此前不带参数时显示成「QuantDesk v」；
   手机页面里「存在浏览器 / 本页面 / 浏览器取数」三处措辞在装成 App 后不成立，已改为
   「这台手机 / 本工具」。手册 start-here 与排障里的「双击 启动.bat」全部改成「双击桌面图标」，
