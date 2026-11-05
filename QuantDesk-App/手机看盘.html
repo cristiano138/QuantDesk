@@ -115,7 +115,7 @@ canvas{width:100%;height:150px;display:block;border-radius:8px;background:var(--
     </div>
     <div class="pool" id="pool"></div>
     <p class="note">支持写法：<b>600519</b>／<b>sh600519</b>／<b>600519.SH</b>／<b>00700.HK</b>／
-      <b>hk00700</b>／<b>700.HK</b>。列表只存在这台手机的浏览器里。</p>
+      <b>hk00700</b>／<b>700.HK</b>。列表只存在这台手机里，不上传。</p>
     <p class="note"><button class="mini" id="btnReset">恢复默认 8 只</button></p>
   </div>
 
@@ -129,7 +129,7 @@ canvas{width:100%;height:150px;display:block;border-radius:8px;background:var(--
   <p class="foot">
     <b>这是本地看盘工具，不是交易通道。</b>
     手机上的同花顺、南京证券等券商 App 都没有对外公开的行情或下单接口，
-    第三方无法读取它们的自选与账户，也不能替它们下单；本页面只用公开行情把
+    第三方无法读取它们的自选与账户，也不能替它们下单；本工具只用公开行情把
     <b>同一批股票的价格、量额、买卖量结构</b>看清楚。要真的下单，只能在电脑上接
     券商官方通道（QMT/miniQMT 或同花顺独立下单程序），并且默认关闭、每笔都要二次确认。
     <br><br>
@@ -142,7 +142,7 @@ canvas{width:100%;height:150px;display:block;border-radius:8px;background:var(--
 "use strict";
 /* ===================================================================
    QuantDesk 手机看盘 —— 单文件、只本地运行、无任何自建服务器
-   取数方式：手机浏览器直接向公开行情取数（脚本回调，不经第三台机器）
+   取数方式：这台手机自己直接向公开行情取数（脚本回调，不经第三台机器）
    只读：全文没有任何下单/撤单/持仓写入口
    =================================================================== */
 

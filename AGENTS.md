@@ -1,7 +1,7 @@
 # QuantDesk — 项目宪法（AGENTS.md）
 
 你正在开发 QuantDesk：一个 Windows 本地 A 股量化交易工作台（Python 3.11 + FastAPI + React + TypeScript）。  
-核心体验：行情面板 → Monaco 策略工作台 → 回测 → 模拟盘 → 实盘（QMT 为主力通道），  
+核心体验：行情面板 → 回测 → 模拟盘 → 实盘（QMT 为主力通道），  
 **同一份策略代码零修改跑通三种模式**；实盘下单必须经服务端三道闸。
 
 ## 硬性约束（每天、每个任务都必须遵守，违反即返工）
@@ -60,7 +60,7 @@ federated 降级路由（以上 SDK 全为**可选依赖**，不进 pyproject，
 ## 架构分层与职责
 
 - UI 层 frontend/src：实时盯盘(/watch，A股+港股只读) / 新手指引(/guide，术语库) / 使用手册(/manual) /  
-  行情面板 / 策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 / 报备清单 / 设置（全局模拟盘开关）
+  行情面板 / 回测报告 / 实盘监控 / 数据管理 / 报备清单 / 设置（全局模拟盘开关）
 - API 网关层 quantdesk/api：routes\_* + ws.py（/ws/events 统一事件流）；只依赖 services  
   （routes_channels 通道全景/探活/凭据/对账/差异认领 · routes_interop 板块与公式互操作 ·  
   routes_system 日志检索与 adapters · routes_backtest 同步+异步队列/进度/取消/明细回看 ·  
@@ -282,3 +282,31 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
 - 验收：pytest **776 passed**；13 条路由在 1440/980/860 三档宽度无横向溢出；
   本机读取接口 <400ms（冷启动盯盘详情 1.3s 一次后 2.7ms）。
 - 提交：`D31-01`（详见进度日志同名小节）。
+
+2026-11-05（同日续）· **可安装 App 轮**（App-02）：「不能安装成APP吗，不想用网页」——
+两端从「打开一个文件」变成「装一个应用」。
+
+- **手机端 = 真 APK**：`QuantDesk-App/android/`（清单 + 原生 WebView 外壳 + 图标 + `build.py`）
+  → `QuantDesk-看盘-1.0.apk`（45 KB，页面随包）。不连电脑、不自建服务器、无任何下单入口；
+  取不到行情时给一句人话并 6 秒自动重试。签名 = 本地自签名 v1+v2+v3，
+  密钥 `android/qd.keystore` **按宪法第 7 条不入 git**（丢了就只能先卸载再装新版）。
+- **电脑端 = 原生 exe + 系统安装登记**：`pc/Launcher.cs` 用 Windows 自带 `csc.exe` 编译出
+  `QuantDesk.exe`（探 8787：已开就把窗口调到最前，没开就带起来 + 进度窗 → 起原生窗口）
+  与 `QuantDesk-安装程序.exe`（桌面/开始菜单图标 + HKCU 卸载登记，`/uninstall` 撤销）。
+  **没有引入任何第三方打包器。**
+- 构建工具链（aapt2/d8/zipalign/apksigner + android-33 android.jar）一次性下到临时目录，
+  构建完即删；重打 APK 需要再拉一次，`build.py` 保留了全部步骤。
+- 两条硬教训（已写进进度日志同名小节）：① JDK 21 `javac -target 8` 给匿名内部类生成的
+  `EnclosingMethod` 描述符为空 → d8 直接 NPE，Android 外壳一律用**具名嵌套类**；
+  ② `aapt2 link --no-compress` 是布尔开关，按后缀免压缩要用 `-0 arsc`，且
+  `resources.arsc` 必须 STORED（targetSdk≥30 的安装判据）。
+- 顺带修掉两处「看起来一切正常」：桌面窗口标题此前不带参数时显示成「QuantDesk v」；
+  手机页面里「存在浏览器 / 本页面 / 浏览器取数」三处措辞在装成 App 后不成立，已改为
+  「这台手机 / 本工具」。手册 start-here 与排障里的「双击 启动.bat」全部改成「双击桌面图标」，
+  手机章节改写为安装流程并补三条 FAQ（怎么装成 App / 为什么拦未知来源 / iPhone 为什么装不了）。
+- 验收：pytest **778 用例全绿（exit 0）**；APK 三重校验（aapt 解析 / apksigner verify / 包内清单）；
+  无头 Chrome 390×820 重拍页面出真实行情（浦发银行 外盘30.40 内盘32.51 主动买占比 48.3%）；
+  `QuantDesk.exe /selftest` 与安装程序实跑回显一致（两个 .lnk + 注册表项都在，窗口标题正确）。
+- **诚实边界**：APK 未真机安装（本机无安卓设备、无 adb）；iPhone 无安装包（需 Mac + 付费开发者账号）；
+  电脑端仍依赖本机已有 Python 环境（自包含大包装需 PyInstaller，未装）。三条都写进
+  `QuantDesk-App/使用说明.txt` 第七节。

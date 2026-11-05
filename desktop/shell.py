@@ -3,18 +3,19 @@
 宪法约束：
 - 只加载 http://127.0.0.1:8787（后端写死本机回环，不做服务器部署）；
 - 壳不承载业务逻辑，仅为窗口容器；
-- 启动方式：先起后端（uvicorn，见 启动.bat）再运行本壳；后端不可达时显示引导文案。
+- 日常入口是 QuantDesk-App 里的 QuantDesk.exe（或开始菜单/桌面图标），它会把行情
+  服务和这个窗口一起带起来；单独运行本壳时后端不可达会显示引导文案。
 """
 
 from __future__ import annotations
 
-import sys
 import time
 
 import webview
 
 BACKEND = "http://127.0.0.1:8787"
 BOOT_TIMEOUT_S = 20
+WINDOW_TITLE = "QuantDesk 看盘台"
 
 
 def _wait_backend(timeout: float = BOOT_TIMEOUT_S) -> bool:
@@ -35,13 +36,14 @@ def _wait_backend(timeout: float = BOOT_TIMEOUT_S) -> bool:
 def main() -> int:
     if not _wait_backend():
         webview.create_window(
-            "QuantDesk — 后端未就绪",
+            f"{WINDOW_TITLE} — 暂时打不开",
             html=(
-                "<body style='font-family:sans-serif;background:#111827;color:#e5e7eb;"
-                "display:flex;align-items:center;justify-content:center;height:100vh'>"
-                "<div><h2>后端未启动</h2>"
-                "<p>请先运行 启动.bat，或：<code>uv run python -m quantdesk.app</code></p>"
-                f"<p>预期地址：{BACKEND}</p></div></body>"
+                "<body style='font-family:\'Microsoft YaHei\',sans-serif;background:#111827;"
+                "color:#e5e7eb;display:flex;align-items:center;justify-content:center;"
+                "height:100vh;text-align:center'>"
+                "<div><h2>软件暂时打不开</h2>"
+                "<p>关掉这个窗口，重新双击桌面的「QuantDesk 看盘台」图标即可。</p>"
+                "<p>反复打不开时，把 data\\logs 目录发给开发者。</p></div></body>"
             ),
             width=900, height=560,
         )
@@ -49,7 +51,7 @@ def main() -> int:
         return 1
 
     webview.create_window(
-        f"QuantDesk v{sys.argv[1] if len(sys.argv) > 1 else ''}".strip(),
+        WINDOW_TITLE,
         BACKEND,
         width=1440, height=900,
         min_size=(1100, 700),

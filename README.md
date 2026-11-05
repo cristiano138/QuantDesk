@@ -31,8 +31,9 @@ cd frontend && pnpm install && pnpm dev   # http://localhost:5173（代理 /api 
 cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与单端口访问需要它）
 ```
 
-桌面壳（D29）：双击 `启动.bat`——自动起后端 + 打开 pywebview 窗口（先 `pnpm build`，
-否则 `/` 返回 503 并提示构建命令）。
+桌面壳（D29）：日常入口是 `QuantDesk-App/QuantDesk.exe`（或安装后桌面上的「QuantDesk 看盘台」
+图标）——自动起后端 + 打开 pywebview 原生窗口（先 `pnpm build`，否则 `/` 返回 503 并提示构建命令）。
+`启动.bat` 与 `QuantDesk-App/电脑端启动.bat` 仍然可用，效果一样。
 
 ## 与主流股票软件结合（通道矩阵）
 
@@ -100,20 +101,30 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 互操作 / 数据 / 设置 / 合规 / 指引 / 排障 / 手机看盘），前端只传 slug——不会出现"页面改了、说明书还是旧的"
 两套事实。设置页每个可编辑项都必须在手册里被解释到（有测试锁住）。
 
-## 手机看盘（本地单文件 App，`QuantDesk-App/`）
+## 可安装的成品（`QuantDesk-App/`）
 
-交付目录 `QuantDesk-App/` 里是三样成品，不依赖构建工具链：
+交付目录 `QuantDesk-App/` 里是**装出来的 App**，两端都不再是"打开一个网页"：
 
-- `手机看盘.html`：拷到手机用浏览器打开即可，可「添加到主屏幕」当 App 用。行情由手机
-  自己向公开来源取数（腾讯 / 东方财富 / 同花顺三个来源可切），**不连电脑、不连任何服务器**；
-  自选股存在手机浏览器本地。给最新价、量额、官方外盘/内盘与主动买占比，点开一只看五档、
+- `QuantDesk-安装程序.exe`：Windows 原生安装器（系统自带的 C# 编译器编译，无第三方打包器）。
+  装完桌面 + 开始菜单出现带图标的「QuantDesk 看盘台」，并在「设置 → 应用」登记一条带
+  卸载入口的记录。只登记图标，不复制不移动任何行情数据。
+- `QuantDesk.exe`：电脑端 App 入口。先探 `127.0.0.1:8787`——已在运行就把窗口调到最前
+  （单实例），没运行就带起来并显示进度，然后打开原生窗口。`/uninstall` 撤销安装。
+- `QuantDesk-看盘-1.0.apk`：安卓手机端 App（约 45 KB，原生外壳 + 随包页面，本地自签名）。
+  装到手机就是独立图标，**不连电脑、不连任何服务器**，行情由手机自己向公开来源取数。
+  构建脚本与源码在 `QuantDesk-App/android/`，密钥 `qd.keystore` 要留着才能覆盖升级。
+- `手机看盘.html`：手机页面本体（也是 APK 里随包的那一份）。iPhone 用它——iOS 不认
+  无 Apple 签名的包，只能 Safari 打开后「添加到主屏幕」。三个行情来源可切（腾讯 /
+  东方财富 / 同花顺），给最新价、量额、官方外盘/内盘与主动买占比，点开一只看五档、
   当日买卖量分档、分时与最近 120 个交易日日 K。全程只读，没有任何下单入口。
-- `电脑端启动.bat`：纯 ASCII + CRLF，先探本机是否已有正常运行的程序，再启动并打开桌面窗口。
-- `使用说明.txt`：手机三种装法、同花顺 / 南京证券的真实接入边界（券商 App 无对外接口，
+- `电脑端启动.bat`：纯 ASCII + CRLF 的老启动方式，留给习惯命令行的人。
+- `使用说明.txt`：两端安装步骤、同花顺 / 南京证券的真实接入边界（券商 App 无对外接口，
   能接的只有电脑端同花顺独立下单程序与券商 QMT 权限）、数据与隐私说明、本版未做的事。
 
-按「只本地运行」执行：端口仍只绑 `127.0.0.1`，没有做局域网配对，也没有产出 .exe/.apk
-（打安装程序需要先装打包工具链，本轮按要求不装）。
+按「只本地运行」执行：端口仍只绑 `127.0.0.1`，没有做局域网配对，手机 App 也不回连这台电脑。
+电脑端两个 exe 用 Windows 自带的 C# 编译器（`csc.exe`）出包，不装任何第三方安装器；
+手机端 APK 用一次性的 Android 构建工具（aapt2 / d8 / zipalign / apksigner + android.jar）
+出包，工具链装在临时目录、构建完即删，重打命令就是 `QuantDesk-App/android/build.py`。
 
 ## 回测结果可回看
 
@@ -212,8 +223,9 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 - `frontend/` React 前端（Vite + TS）：**实时盯盘** / 行情 / 回测 / 实盘监控 /
   数据管理 / 合规报备 / 通道管理 / 软件互操作 / **新手指引** / **使用手册** / 设置
 - `desktop/` pywebview 桌面壳
-- `QuantDesk-App/` 交付成品：`手机看盘.html`（手机单文件看盘 App）· `电脑端启动.bat` ·
-  `使用说明.txt`（含同花顺 / 南京证券接入方法与边界）
+- `QuantDesk-App/` 可安装成品：`QuantDesk.exe` + `QuantDesk-安装程序.exe`（电脑端原生 App）、
+  `QuantDesk-看盘-1.0.apk`（安卓手机 App）、`手机看盘.html`（页面本体 / iPhone 用）、
+  `android/` 与 `pc/`（两端 App 源码与构建脚本）、`使用说明.txt`（含同花顺 / 南京证券接入方法与边界）
 - `scripts/` 数据与运维脚本（含 `e2e_v1.py` 全链路验收、`dod_d27_align.py` 数据源审计、
   `verify_sources.py` 交叉对数、`bench_ipc.py` IPC 压测）
 - `strategies/` 用户策略（只依赖 BaseStrategy，零适配器依赖）
