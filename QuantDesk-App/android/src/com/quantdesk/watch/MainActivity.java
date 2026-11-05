@@ -1,6 +1,7 @@
 package com.quantdesk.watch;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
@@ -115,8 +116,27 @@ public class MainActivity extends Activity {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    /** 取不到行情时给一句人话，而不是浏览器错误页。只处理整页失败，不误伤单个数据请求。 */
+    /** 取不到行情时给一句人话，而不是浏览器错误页。只处理整页失败，不误伤单个数据请求。
+     *  页面里的「在手机 App 中打开」等外链（同花顺/东方财富/腾讯自选股）必须交给系统：
+     *  装了对应 App 就由它接手，没装就落浏览器；绝不能在壳内导航把看盘页顶掉。 */
     private static final class PageGuard extends WebViewClient {
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            if (request == null || request.getUrl() == null) return false;
+            String scheme = request.getUrl().getScheme();
+            if ("http".equals(scheme) || "https".equals(scheme)) {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, request.getUrl());
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    view.getContext().startActivity(intent);
+                } catch (Exception ignored) {
+                    // 没有任何 App 能接手这个链接：留在看盘页，不算错误
+                }
+                return true;
+            }
+            return false;
+        }
+
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             if (request != null && request.isForMainFrame()) {
