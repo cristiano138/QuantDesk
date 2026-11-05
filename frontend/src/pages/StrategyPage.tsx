@@ -15,6 +15,7 @@ import {
   type LogSourceCount,
   type StrategyStatus,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 const NEW_TEMPLATE = `"""我的策略：只依赖 BaseStrategy/ctx，禁止 import 任何适配器（宪法第 6 条）。"""
 
@@ -244,7 +245,12 @@ export default function StrategyPage() {
   const [msg, setMsg] = useState('')
   const [tab, setTab] = useState<'live' | 'history'>('live')
   const [dialog, setDialog] = useState(false)
+  const [newOpen, setNewOpen] = useState(false)
+  const [newName, setNewName] = useState('my_strategy.py')
+  const [newErr, setNewErr] = useState('')
   const logRef = useRef<HTMLPreElement>(null)
+  // 刚新建的文件不去读盘：读必然 404，兜底模板回来时会盖掉用户已经敲进去的字符
+  const skipReadFor = useRef('')
 
   const refreshFiles = useCallback(() => {
     listStrategyFiles()
@@ -260,6 +266,10 @@ export default function StrategyPage() {
   // 打开文件
   useEffect(() => {
     if (!selected) return
+    if (skipReadFor.current === selected) {
+      skipReadFor.current = ''
+      return
+    }
     readStrategyFile(selected)
       .then((f) => {
         setCode(f.code)
@@ -322,11 +332,40 @@ export default function StrategyPage() {
     }
   }
 
-  const saveAs = () => {
-    const name = window.prompt('新策略文件名（如 my_ma.py）：')
-    if (!name) return
-    setSelected(name)
+  /** 校验新建路径：桌面壳（pywebview）里 window.prompt 不可用，必须在页内给反馈。 */
+  const validateNewPath = (raw: string): string => {
+    const p = raw.trim()
+    if (!p) return '请填写策略文件名，例如 my_ma.py'
+    if (!p.toLowerCase().endsWith('.py')) return '路径必须以 .py 结尾'
+    const base = p.split(/[/\\]/).pop() ?? p
+    if (base.startsWith('_')) return '文件名不能以 _ 开头（引擎按模块名动态加载，_ 开头会被当作内部文件跳过）'
+    return ''
+  }
+
+  const openNewForm = () => {
+    setNewName('my_strategy.py')
+    setNewErr('')
+    setNewOpen(true)
+  }
+
+  const confirmNew = () => {
+    const bad = validateNewPath(newName)
+    if (bad) {
+      setNewErr(bad)
+      return
+    }
+    const p = newName.trim().replace(/\\/g, '/')
+    if (files.includes(p) || files.some((f) => f === p.split('/').pop())) {
+      setNewErr(`${p} 已存在——要改它请在左侧列表点开后编辑；新建请换个文件名`)
+      return
+    }
+    skipReadFor.current = p
+    setNewOpen(false)
+    setNewErr('')
+    setSelected(p)
+    setCode(NEW_TEMPLATE)
     setDirty(true)
+    setMsg(`新策略 ${p} 已在编辑器里备好模板，改完点「保存」写入磁盘`)
   }
 
   const doStart = async (mode: 'paper' | 'live', freq: string) => {
@@ -357,7 +396,7 @@ export default function StrategyPage() {
 
   return (
     <section>
-      <h2>策略工作台</h2>
+      <h2>策略工作台<HelpLink slug="strategy" /></h2>
       <div className="strategy-layout">
         <div className="card strategy-tree">
           <h3>策略文件</h3>
@@ -370,7 +409,38 @@ export default function StrategyPage() {
               </li>
             ))}
           </ul>
-          <button onClick={saveAs}>新建策略</button>
+          {newOpen ? (
+            <div className="result-block">
+              <label>
+                新策略文件（相对 strategies/ 目录）
+                <input
+                  value={newName}
+                  onChange={(e) => {
+                    setNewName(e.target.value)
+                    setNewErr('')
+                  }}
+                  placeholder="my_ma.py"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmNew()
+                    if (e.key === 'Escape') setNewOpen(false)
+                  }}
+                />
+              </label>
+              <p className="sub-note">必须以 .py 结尾，且文件名不以 _ 开头。</p>
+              {newErr && <p className="badge badge-down">{newErr}</p>}
+              <div className="row-btns">
+                <button className="mini" onClick={confirmNew}>
+                  确认新建
+                </button>
+                <button className="mini" onClick={() => { setNewOpen(false); setNewErr('') }}>
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={openNewForm}>新建策略</button>
+          )}
         </div>
 
         <div className="card strategy-editor">

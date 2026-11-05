@@ -214,14 +214,38 @@ class ReconcileService:
         return diffs
 
     # ---------- 查询 ----------
-    def recent_diffs(self, limit: int = 100) -> list[dict]:
-        return repo.reconcile_recent(limit=limit, db_path=self.db_path)
+    def recent_diffs(self, limit: int = 100, diffs_only: bool = False) -> list[dict]:
+        """最近的对账行。默认含每轮无差异的审计行（"这一轮我核对过、没差异"也是事实）。
+
+        要"只看差异"传 diffs_only=True——API 层默认就是这么给的，界面上列的是差异，
+        不是心跳。服务层保持旧默认：改了它的默认语义等于给所有调用方埋一个惊喜。
+        """
+        return repo.reconcile_recent(limit=limit, db_path=self.db_path,
+                                     diffs_only=diffs_only)
+
+    def open_diffs(self, limit: int = 100, diffs_only: bool = True) -> list[dict]:
+        """还没处置的差异（红条只统计这些——列出来没人认领，噪音会淹掉真事故）。
+
+        diffs_only=True：每轮无差异也会落一条 kind="clean" 的审计行，它不是差异。
+        不排除的话「待处置」按 30s 一轮心跳增长，一天两千多，真差异反而看不见。
+        要审计流水（含每轮无差异记录）传 False——两个分支都尊重这个参数，
+        不然前端那个「含每轮无差异记录」的勾在某些视图下点了没反应。
+        """
+        return repo.reconcile_recent(limit=limit, db_path=self.db_path,
+                                     unresolved_only=True, diffs_only=diffs_only)
+
+    def resolve(self, diff_id: int, note: str = "", resolve: bool = True) -> dict | None:
+        row = repo.reconcile_resolve(diff_id, note=note, resolve=resolve, db_path=self.db_path)
+        if row is not None:
+            self._publish({"action": "reconcile_resolved", "diff": row})
+        return row
 
     def status(self) -> dict:
         with self._lock:
             res = dict(self.last_result)
         res.update({"channel": self._channel_name(), "interval_s": self._cfg_interval(),
                     "running": self._thread is not None and self._thread.is_alive(),
+                    "open": len(self.open_diffs(limit=500)),
                     "kinds": KINDS})
         return res
 

@@ -7,18 +7,26 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   addWatch,
+  addWatchPool,
+  apiError,
+  FIN_TYPE_LABELS,
+  getFinancial,
   getFreqs,
   getHistory,
   getSnapshot,
   getWatchlist,
   removeWatch,
   type BarRow,
+  type FinReportType,
+  type FinancialDoc,
   type TickSnapshot,
   type WatchItem,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 const FREQ_LABELS: Record<string, string> = {
   '1d': '日',
@@ -125,10 +133,16 @@ function IntradayChart({ bars }: { bars: BarRow[] }) {
   return <div ref={ref} style={{ width: '100%' }} />
 }
 
-/** 五档盘口 + 买卖压力条。 */
-function OrderBook({ tick }: { tick: TickSnapshot | null }) {
+/** 五档盘口 + 买卖压力条。note 是后端给的空态原因（没原因就别猜，宁可只说"等待"）。 */
+function OrderBook({ tick, note }: { tick: TickSnapshot | null; note?: string }) {
   if (!tick || (tick.bids.length === 0 && tick.asks.length === 0)) {
-    return <p className="placeholder">五档盘口：等待实时行情（D14 接入实时源后显示）。</p>
+    return (
+      <p className="placeholder">
+        {note
+          ? `五档盘口：${note}`
+          : '五档盘口：等待实时行情（实时泵只推送已订阅的标的）。'}
+      </p>
+    )
   }
   const maxVol = Math.max(
     1,
@@ -181,6 +195,62 @@ function OrderBook({ tick }: { tick: TickSnapshot | null }) {
   )
 }
 
+/** 报告期代码转人话：20260930 → 2026三季；认不出来的原样显示（不猜）。 */
+function periodLabel(p: string): string {
+  const suffix: Record<string, string> = { '0331': '一季', '0630': '中期', '0930': '三季', '1231': '年报' }
+  return /^\d{8}$/.test(p) ? `${p.slice(0, 4)}${suffix[p.slice(4)] ?? p.slice(4)}` : p
+}
+
+/** 金额缩写按数量级判，不靠字段名猜；原值放 title，缩写不等于丢精度。 */
+function fmtValue(v: number | null): { text: string; raw: string } {
+  if (v === null || v === undefined || Number.isNaN(v)) return { text: '—', raw: '未披露（不是 0）' }
+  const raw = v.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+  const a = Math.abs(v)
+  if (a >= 1e8) return { text: `${(v / 1e8).toFixed(2)} 亿`, raw }
+  if (a >= 1e4) return { text: `${(v / 1e4).toFixed(2)} 万`, raw }
+  return { text: raw, raw }
+}
+
+/** 财务三表：后端已按分组转好，这里只做展示；比率类原值、金额类缩写、缺期显示「—」。 */
+function FinTable({ doc }: { doc: FinancialDoc }) {
+  return (
+    <div className="fin-wrap">
+      <p className="sub-note">
+        {doc.symbol} · {doc.report_type} · 共 {doc.rows} 项指标 · 源 {doc.source}
+        {doc.cached ? '（本机缓存）' : ''}｜{doc.note}
+      </p>
+      <table className="fin-table">
+        <thead>
+          <tr>
+            <th>指标</th>
+            {doc.periods.map((p) => (
+              <th key={p} title={p}>{periodLabel(p)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {doc.groups.map((g) => (
+            <Fragment key={g.name}>
+              <tr className="fin-group">
+                <td colSpan={doc.periods.length + 1}>{g.name}</td>
+              </tr>
+              {g.items.map((it) => (
+                <tr key={`${g.name}-${it.indicator}`}>
+                  <td>{it.indicator}</td>
+                  {doc.periods.map((p) => {
+                    const cell = fmtValue(it.values[p] ?? null)
+                    return <td key={p} title={cell.raw}>{cell.text}</td>
+                  })}
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function MarketPage() {
   const [watch, setWatch] = useState<WatchItem[]>([])
   const [symbol, setSymbol] = useState('600000.SH')
@@ -188,11 +258,30 @@ export default function MarketPage() {
   const [freqs, setFreqs] = useState<string[]>([])
   const [bars, setBars] = useState<BarRow[]>([])
   const [intraday, setIntraday] = useState<BarRow[]>([])
-  const [tab, setTab] = useState<'kline' | 'intraday'>('kline')
+  const [tab, setTab] = useState<'kline' | 'intraday' | 'financial'>('kline')
+  // 财务三表：只在点开页签时取，按 标的:表种 缓存；首次是真实外呼（几秒），不给加载态就会像卡死
+  const [finType, setFinType] = useState<FinReportType>('indicator')
+  const [finDocs, setFinDocs] = useState<Record<string, FinancialDoc>>({})
+  const [finLoading, setFinLoading] = useState(false)
+  const [finErr, setFinErr] = useState('')
+  const [finNonce, setFinNonce] = useState(0)
+  const [poolMsg, setPoolMsg] = useState('')
+  const finInflight = useRef<Set<string>>(new Set())
   const [tick, setTick] = useState<TickSnapshot | null>(null)
+  const [snapNote, setSnapNote] = useState('')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
+  const [watchErr, setWatchErr] = useState('')
+
+  const loadWatchlist = useCallback(() => {
+    getWatchlist()
+      .then((w) => {
+        setWatch(w)
+        setWatchErr('')
+      })
+      .catch((e: unknown) => setWatchErr(apiError(e))) // 连不上 ≠ 自选股为空
+  }, [])
 
   const loadBars = useMemo(
     () => async (sym: string, f: string) => {
@@ -211,7 +300,7 @@ export default function MarketPage() {
           }
         }
       } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e))
+        setErr(apiError(e))
         setBars([])
       } finally {
         setLoading(false)
@@ -221,8 +310,8 @@ export default function MarketPage() {
   )
 
   useEffect(() => {
-    getWatchlist().then(setWatch).catch(() => setWatch([]))
-  }, [])
+    loadWatchlist()
+  }, [loadWatchlist])
 
   useEffect(() => {
     if (!symbol) return
@@ -230,26 +319,57 @@ export default function MarketPage() {
     getFreqs(symbol).then(setFreqs).catch(() => setFreqs([]))
   }, [symbol, freq, loadBars])
 
-  // 快照轮询（1s；实时源接入后可切 WS）。后端无行情返回 null。
+  // 快照轮询（1s；实时源接入后可切 WS）。后端无行情时带 reason，界面照原话说。
   useEffect(() => {
     if (!symbol) return
     const load = () =>
       getSnapshot(symbol)
-        .then((tk) => setTick(tk && tk.last != null ? tk : null))
-        .catch(() => setTick(null))
+        .then((tk) => {
+          const live = tk && tk.last != null ? tk : null
+          setTick(live)
+          setSnapNote(live ? '' : tk && tk.reason ? tk.reason : '')
+        })
+        .catch(() => {
+          setTick(null)
+          setSnapNote('连不上后端（快照接口失败）')
+        })
     load()
     const t = setInterval(load, 1000)
     return () => clearInterval(t)
   }, [symbol])
 
+  // 财务取数：只在页签打开且本地没有该 (标的,表种) 时发一次；晚到的响应按自己的 key 落位，
+  // 不会把上一家公司的报表画到当前标的上
+  const finKey = `${symbol}:${finType}`
+  useEffect(() => {
+    if (tab !== 'financial' || finDocs[finKey] || finInflight.current.has(finKey)) return
+    finInflight.current.add(finKey)
+    setFinLoading(true)
+    setFinErr('')
+    getFinancial(symbol, finType)
+      .then((doc) => setFinDocs((cur) => ({ ...cur, [finKey]: doc })))
+      .catch((e: unknown) => setFinErr(apiError(e)))
+      .finally(() => {
+        finInflight.current.delete(finKey)
+        setFinLoading(false)
+      })
+  }, [tab, symbol, finType, finKey, finDocs, finNonce])
+
   const last = bars.length > 0 ? bars[bars.length - 1] : null
 
   return (
     <section>
-      <h2>行情面板</h2>
+      <h2>行情面板<HelpLink slug="market" /></h2>
       <div className="market-layout">
         <div className="card market-watch">
           <h3>自选股</h3>
+          {watchErr && <p className="badge badge-down">自选股读取失败：{watchErr}</p>}
+          {watchErr && (
+            <p className="sub-note">
+              连不上后端时不会把这里显示成「没有自选股」——
+              <button className="mini" onClick={loadWatchlist}>重试</button>
+            </p>
+          )}
           <ul>
             {watch.map((w) => (
               <li key={w.symbol}>
@@ -262,7 +382,14 @@ export default function MarketPage() {
                 <button
                   className="del"
                   title="移除"
-                  onClick={async () => setWatch(await removeWatch(w.symbol))}
+                  onClick={async () => {
+                    try {
+                      setWatch(await removeWatch(w.symbol))
+                      setWatchErr('')
+                    } catch (e) {
+                      setWatchErr(apiError(e))
+                    }
+                  }}
                 >
                   ×
                 </button>
@@ -278,8 +405,13 @@ export default function MarketPage() {
             <button
               onClick={async () => {
                 if (!input.trim()) return
-                setWatch(await addWatch(input.trim().toUpperCase()))
-                setInput('')
+                try {
+                  setWatch(await addWatch(input.trim().toUpperCase()))
+                  setInput('')
+                  setWatchErr('')
+                } catch (e) {
+                  setWatchErr(apiError(e)) // 代码格式/重复/后端离线都在此回显，不静默
+                }
               }}
             >
               添加
@@ -296,16 +428,47 @@ export default function MarketPage() {
               )}
               {last && <span className="badge">收盘 {last.close.toFixed(2)}</span>}
               <span className="freq-tabs">
-                {(['kline', 'intraday'] as const).map((t) => (
+                <button
+                  title={`把 ${symbol} 加进盯盘池（已在不重复加）`}
+                  onClick={async () => {
+                    try {
+                      const r = await addWatchPool([symbol])
+                      setPoolMsg(r.added.length ? `${symbol} 已加入盯盘池` : `${symbol} 本来就在盯盘池里`)
+                    } catch (e) {
+                      setPoolMsg(`加入盯盘池失败：${apiError(e)}`)
+                    }
+                  }}
+                >
+                  加进盯盘池
+                </button>
+                <Link className="freq-tab-link" to={`/watch?symbol=${encodeURIComponent(symbol)}`}>
+                  在盯盘池看这只
+                </Link>
+              </span>
+              <span className="freq-tabs">
+                {(['kline', 'intraday', 'financial'] as const).map((t) => (
                   <button
                     key={t}
                     className={tab === t ? 'active' : ''}
                     onClick={() => setTab(t)}
                   >
-                    {t === 'kline' ? 'K线' : '分时'}
+                    {t === 'kline' ? 'K线' : t === 'intraday' ? '分时' : '财务'}
                   </button>
                 ))}
               </span>
+              {tab === 'financial' && (
+                <span className="freq-tabs">
+                  {(Object.keys(FIN_TYPE_LABELS) as FinReportType[]).map((id) => (
+                    <button
+                      key={id}
+                      className={finType === id ? 'active' : ''}
+                      onClick={() => setFinType(id)}
+                    >
+                      {FIN_TYPE_LABELS[id]}
+                    </button>
+                  ))}
+                </span>
+              )}
               <span className="freq-tabs">
                 {Object.entries(FREQ_LABELS).map(([f, label]) => (
                   <button
@@ -322,25 +485,65 @@ export default function MarketPage() {
                 ))}
               </span>
             </div>
-            {loading && <p className="placeholder">加载中…</p>}
-            {!loading && bars.length === 0 && (
+            {poolMsg && <p className="sub-note">{poolMsg}</p>}
+            {loading && tab !== 'financial' && <p className="placeholder">加载中…</p>}
+            {!loading && tab === 'kline' && bars.length === 0 && !err && (
               <p className="placeholder">
-                本地无 {symbol} {freq} 数据——请在「数据管理」页下载（K 线全部走 Parquet 本地缓存）。
+                本地还没有 {symbol} 的 {FREQ_LABELS[freq] ?? freq}数据——这不是行情丢了，是这台机器上
+                还没下载过。K 线全部读本地 Parquet，请去
+                <Link to="/data" style={{ color: '#1d4ed8', margin: '0 4px' }}>数据管理</Link>
+                页把这只标的下载下来（下载完回到这里就能看到）。
+                <br />
+                不清楚下载要填什么、选哪个周期和复权，看
+                <Link to="/manual?s=market" style={{ color: '#1d4ed8', margin: '0 4px' }}>行情面板怎么用</Link>
+                与
+                <Link to="/manual?s=data" style={{ color: '#1d4ed8', margin: '0 4px' }}>数据管理怎么用</Link>
+                。
               </p>
             )}
             {!loading && bars.length > 0 && tab === 'kline' && <KLine bars={bars} />}
             {!loading && tab === 'intraday' && (intraday.length > 0 ? (
               <IntradayChart bars={intraday} />
             ) : (
-              <p className="placeholder">暂无分钟线数据——数据管理页下载 1m 后可用。</p>
+              <p className="placeholder">
+                暂无分钟线数据——到
+                <Link to="/data" style={{ color: '#1d4ed8', margin: '0 4px' }}>数据管理</Link>
+                页下载 {symbol} 的 1m 周期后可用。
+              </p>
             ))}
-            {err && <p className="badge badge-down">{err}</p>}
+            {tab === 'financial' && (
+              finDocs[finKey] ? (
+                <FinTable doc={finDocs[finKey]} />
+              ) : finLoading ? (
+                <p className="placeholder">
+                  正在取 {symbol} 的{FIN_TYPE_LABELS[finType]}…
+                  首次要外呼公开接口（AKShare，免账号），约 3~10 秒；同一标的同一表种本机缓存 5 分钟，
+                  来回切换不会再等。港股没有新浪三表（会如实报错），财务摘要同样不适用。
+                </p>
+              ) : finErr ? (
+                <p className="badge badge-down">
+                  {finErr}
+                  <button
+                    style={{ marginLeft: 8 }}
+                    onClick={() => {
+                      setFinErr('')
+                      setFinNonce((n) => n + 1)
+                    }}
+                  >
+                    重试
+                  </button>
+                </p>
+              ) : (
+                <p className="placeholder">未取数。</p>
+              )
+            )}
+            {err && tab !== 'financial' && <p className="badge badge-down">{err}</p>}
           </div>
         </div>
 
         <div className="card market-book">
           <h3>五档盘口</h3>
-          <OrderBook tick={tick} />
+          <OrderBook tick={tick} note={snapNote} />
         </div>
       </div>
     </section>

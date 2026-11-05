@@ -23,6 +23,7 @@ import {
   type GuideCategory,
   type GuideTerm,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 /** 「全部」分类的本地哨兵值（不发给后端：全量已在前端过滤）。 */
 const ALL_CAT = 'all'
@@ -535,7 +536,7 @@ export default function GuidePage() {
   if (loadErr) {
     return (
       <section>
-        <h2>新手指引</h2>
+        <h2>新手指引<HelpLink slug="guide" /></h2>
         <div className="alert-banner">
           <p>
             <b>术语库加载失败：</b>
@@ -555,7 +556,7 @@ export default function GuidePage() {
   if (!cats || !all) {
     return (
       <section>
-        <h2>新手指引</h2>
+        <h2>新手指引<HelpLink slug="guide" /></h2>
         <p className="placeholder">正在加载术语库（分类与全部术语各一次请求，之后搜索不再请求）…</p>
       </section>
     )
@@ -565,13 +566,13 @@ export default function GuidePage() {
 
   return (
     <section>
-      <h2>新手指引</h2>
+      <h2>新手指引<HelpLink slug="guide" /></h2>
       <p className="sub-note" style={{ marginBottom: 12 }}>
         零基础看盘词典：全库 {all.length} 条术语、{cats.length} 个分类。左边选分类，中间点术语，右边看解释。
         内容全部由后端术语库提供，本页不做任何交易相关操作。
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '260px minmax(320px, 1fr) minmax(400px, 1.35fr)', gap: 16, alignItems: 'start' }}>
+      <div className="guide-layout">
         <CategoryNav
           cats={cats}
           total={all.length}

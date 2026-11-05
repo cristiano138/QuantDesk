@@ -9,6 +9,7 @@
  *   详情级（分时/逐笔/K线/历史）走更慢的 18–20s 循环，切标的即清 timer。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   CandlestickSeries,
   HistogramSeries,
@@ -29,6 +30,7 @@ import {
   getWatchList,
   getWatchStatus,
   getWatchTicks,
+  getWatchlist,
   openEvents,
   refreshWatch,
   removeWatchPool,
@@ -40,6 +42,7 @@ import {
   type WatchRow,
   type WatchStatus,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 // 按需注册（分时折线 + 买卖量柱）——全量引入使构建产物超 500KB。
 // AxisPointerComponent 必须显式注册：option 里用了 tooltip.axisPointer 与顶层 axisPointer.link，
@@ -531,8 +534,10 @@ function barRow(max: number, v: number, side: 'bid' | 'ask') {
 export default function WatchPage() {
   const [status, setStatus] = useState<WatchStatus | null>(null)
   const [rows, setRows] = useState<WatchRow[]>([])
-  const [symbol, setSymbol] = useState('')
+  const [params] = useSearchParams()
+  const [symbol, setSymbol] = useState(() => (params.get('symbol') ?? '').trim().toUpperCase())
   const [detail, setDetail] = useState<WatchDetail | null>(null)
+  const [detailNonce, setDetailNonce] = useState(0)
   const [tickPage, setTickPage] = useState<TickPage | null>(null)
   const [tickSide, setTickSide] = useState('')
   const [tickOffset, setTickOffset] = useState(0)
@@ -564,6 +569,14 @@ export default function WatchPage() {
 
   const listBusy = useRef(false)
   const listAt = useRef(0)
+  const detailForce = useRef(false)
+
+  // 深链 /watch?symbol=600000.SH：从行情面板「在盯盘池看这只」跳过来就直接选中，
+  // 不用用户在几十个行里再找一次（两个页面本来就在讲同一只票）
+  useEffect(() => {
+    const fromUrl = (params.get('symbol') ?? '').trim().toUpperCase()
+    if (fromUrl) setSymbol(fromUrl)
+  }, [params])
 
   /** 列表级刷新：一次批量外呼拿整池快照 + 服务端状态；失败退回本地快照并如实报原因。
    *  force=false 时服务端自带时段闸（休市不外呼），页面通宵开着也不打公开接口。 */
@@ -604,10 +617,13 @@ export default function WatchPage() {
     }
   }, [setErr])
 
+  /** 手动刷新=强制取最新：不带 force 时服务端时段闸会把休市点击直接挡回缓存，按钮等于无效。 */
   const manualRefresh = useCallback(async () => {
     setBusy(true)
+    detailForce.current = true      // 详情那一侧同样要绕过时段闸，否则列表新了、详情还是旧的
     try {
-      await loadList()
+      await loadList(true)
+      setDetailNonce((n) => n + 1)
     } finally {
       if (mounted.current) setBusy(false)
     }
@@ -658,7 +674,11 @@ export default function WatchPage() {
     const run = () => {
       if (inFlight) return
       inFlight = true
-      getWatchDetail(symbol)
+      // force 只在用户点「立即刷新」那一次为真（取完即清），自动轮询永远 false——
+      // 否则每 3s 一次强制外呼，公开接口会把我们拉黑，休市零外呼的纪律也就破了
+      const force = detailForce.current
+      detailForce.current = false
+      getWatchDetail(symbol, force)
         .then((d) => { if (alive) { setDetail(d); setErr('detail', '') } })
         .catch((e: unknown) => { if (alive) setErr('detail', apiError(e)) })
         .finally(() => { inFlight = false })
@@ -666,7 +686,7 @@ export default function WatchPage() {
     run()
     const t = auto ? setInterval(run, DETAIL_MS) : undefined
     return () => { alive = false; if (t !== undefined) clearInterval(t) }
-  }, [symbol, auto, setErr])
+  }, [symbol, auto, detailNonce, setErr])
 
   // ---- 逐笔明细分页（最新在前）----
   useEffect(() => {
@@ -754,6 +774,33 @@ export default function WatchPage() {
     }
   }
 
+  /** 一键把「行情面板」的自选股带进盯盘池：两个列表本来讲的是同一批票，
+   *  以前要用户重打一遍代码——这是"板块之间不知道怎么用"的真实来源之一。 */
+  const importFromWatchlist = async () => {
+    setBusy(true)
+    setPoolMsg('')
+    setErr('pool', '')
+    try {
+      const list = await getWatchlist()
+      if (list.length === 0) {
+        setPoolMsg('自选股是空的：先去「行情面板」加自选，再回来一键带过来。')
+        return
+      }
+      const r = await addWatchPool(list.map((w) => w.symbol))
+      const errs = r.errors ?? []
+      const head =
+        r.added.length > 0
+          ? `自选股 ${list.length} 只：新加入 ${r.added.length} 只`
+          : `自选股 ${list.length} 只都已在盯盘池里`
+      setPoolMsg(errs.length ? `${head}；失败 ${errs.length} 条：${errs.map((x) => `${x.symbol}：${x.error}`).join('；')}` : head)
+      await loadList()
+    } catch (e) {
+      setErr('pool', poolErrText(e))
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }
+
   const removePool = async (s: string) => {
     setBusy(true)
     setErr('pool', '')
@@ -818,7 +865,7 @@ export default function WatchPage() {
 
   return (
     <section>
-      <h2>实时盯盘（只读看盘：A股 + 港股，本页不含任何交易功能）</h2>
+      <h2>实时盯盘（只读看盘：A股 + 港股，本页不含任何交易功能）<HelpLink slug="watch" /></h2>
 
       {(errList.length > 0 || liveErr) && (
         <div className="alert-banner">
@@ -872,9 +919,15 @@ export default function WatchPage() {
               {INTERVALS.map((ms) => <option key={ms} value={ms}>{ms / 1000} 秒</option>)}
             </select>
           </label>
-          <button className="mini" disabled={busy} onClick={() => void manualRefresh()}>
+          <button
+            className="mini"
+            disabled={busy}
+            title="强制取最新（会真实请求行情接口）"
+            onClick={() => void manualRefresh()}
+          >
             {busy ? '刷新中…' : '立即刷新'}
           </button>
+          <span className="sub-note">立即刷新＝强制取最新（会真实请求行情接口）</span>
         </div>
         <p className="sub-note">
           盯盘池 {status?.pool_size ?? 0} 只 · 列表刷新 {status?.last_refresh_at ? fmtTsMs(status.last_refresh_at) : '尚未刷新'}
@@ -901,6 +954,13 @@ export default function WatchPage() {
               onKeyDown={(e) => { if (e.key === 'Enter') void addPool() }}
             />
             <button disabled={busy} onClick={() => void addPool()}>添加</button>
+            <button
+              disabled={busy}
+              onClick={() => void importFromWatchlist()}
+              title="把「行情面板」里的自选股一次性加进盯盘池（去重，已在不重复加）"
+            >
+              从自选股导入
+            </button>
           </div>
         </div>
         {poolMsg && <p className="sub-note">{poolMsg}</p>}
@@ -912,7 +972,13 @@ export default function WatchPage() {
           </div>
         )}
         {status && status.pool.length === 0 && (
-          <p className="placeholder">盯盘池为空：添加代码后才会外呼行情（空池不外呼）。</p>
+          <p className="placeholder">
+            盯盘池为空：添加代码后才会外呼行情（空池不外呼）。
+            也可以点「从自选股导入」把
+            <Link to="/market" style={{ color: '#1d4ed8', margin: '0 4px' }}>行情面板</Link>
+            的自选一次性带过来。不懂这套代码写法看
+            <Link to="/manual?s=watch" style={{ color: '#1d4ed8', margin: '0 4px' }}>实时盯盘怎么用</Link>。
+          </p>
         )}
       </div>
 

@@ -4,7 +4,10 @@
 新增数据源/券商 = 新增一个文件 + 模块级 ADAPTER 导出，核心引擎零改动。
 
 治理规则：
-- 模块 import 失败（可选依赖在**顶层**被 import 的旧式适配器）→ 跳过并告警，不阻塞启动；
+- 模块 import 失败（可选依赖在**顶层**被 import 的旧式适配器，或文件本身有语法错误）
+  → 不阻塞启动，但**登记成一条状态为 unready 的通道并带 load_error 原文**。
+  静默跳过等于让整条通道从界面消失：本轮真实发生过一次（自己写的文件里一个语法错误
+  → AKShare 整条通道不见 → 界面只剩一句"无可用财务源: None"，谁也查不出来）；
 - 类声明 `requires` 的 SDK 缺失 → 仍然登记，状态如实上报「未就绪 + 缺哪个模块」，
   实例化时由适配器自己抛带安装引导的 AdapterError（可观测性优于静默消失）；
 - 类声明 `default_enabled=False` → **注册表源头即不可见**（get_adapter_class 抛 KeyError、
@@ -29,6 +32,7 @@ _SCAN_PACKAGES = {
 
 _ALL: dict[str, type] = {}            # name → 适配器类（含默认禁用者）
 _META: dict[str, AdapterMeta] = {}   # name → 元数据快照
+_BROKEN: dict[str, dict] = {}        # 模块名 → 装载失败详情（静默跳过会让通道凭空消失）
 _SCAN_DONE = False
 
 
@@ -42,8 +46,11 @@ def _scan() -> None:
             mod_name = f"{pkg_name}.{mod_info.name}"
             try:
                 mod = importlib.import_module(mod_name)
-            except Exception as e:  # noqa: BLE001 可选依赖缺失 → 跳过该适配器
+            except Exception as e:  # noqa: BLE001 可选依赖在顶层被 import 的旧式适配器：跳过并告警
                 log.warning("适配器模块加载失败（跳过）: %s: %s", mod_name, e)
+                # 但必须登记成"看得见的坏通道"：本轮真实踩过——自己写的文件里一个语法错误
+                # 让整条 AKShare 通道从注册表消失，界面只剩一句"无可用财务源: None"
+                _BROKEN[mod_name] = {"kind": kind, "error": f"{type(e).__name__}: {e}"}
                 continue
             adapter = getattr(mod, "ADAPTER", None)
             if adapter is None:
@@ -116,6 +123,18 @@ def describe_adapters(include_disabled: bool = True) -> list[dict]:
         else:
             row["status"] = "ready"
         out.append(row)
+    # 装载失败的模块也进清单（键与其它行完全同构，前端不需要为它加新分支）
+    for mod_name, info in sorted(_BROKEN.items()):
+        short = mod_name.rsplit(".", 1)[-1]
+        out.append({"name": f"{short}(装载失败)", "kind": info["kind"],
+                    "label": f"{short}（模块装载失败）",
+                    "prereq": "这个适配器文件当前导入不了，修好它才会出现在这里",
+                    "official": False, "requires": [], "requires_any": False,
+                    "missing": [], "deps_ready": False,
+                    "default_enabled": True, "enable_flag": None,
+                    "is_paper": False, "capabilities": [],
+                    "status": "unready", "load_error": info["error"]})
+    out.sort(key=lambda r: r["name"])
     return out
 
 
@@ -129,3 +148,4 @@ def reset_registry_for_test() -> None:
     _SCAN_DONE = False
     _ALL.clear()
     _META.clear()
+    _BROKEN.clear()

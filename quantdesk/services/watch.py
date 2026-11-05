@@ -346,6 +346,15 @@ class WatchService:
                 log.info("东财补字段失败 %s: %s", row.get("symbol"), e)
         return row
 
+    def live_row(self, symbol: str) -> dict:
+        """一只标的的当前快照行（行情面板的五档走这里，见文档字符串的设计说明）。"""
+        return self._ensure_live(normalize(symbol))
+
+    def cached_row(self, symbol: str) -> dict:
+        """只读缓存，绝不外呼——给"自动路径"用（宪法第 11 条③：休市时自动路径不外呼）。"""
+        with self._lock:
+            return dict(self._live.get(normalize(symbol)) or {})
+
     def _ensure_live(self, sym: str) -> dict:
         """取一只标的的快照，缓存里没有（或没探过内外盘）就当场外呼一次。
 

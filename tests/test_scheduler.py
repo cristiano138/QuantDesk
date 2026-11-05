@@ -5,17 +5,20 @@ from quantdesk.services.scheduler import PostCloseScheduler
 
 
 def test_scheduler_cron_wired():
-    """18:00 盘后下载 + 盯盘轮询 + A股/港股各自收盘定格与 K 线补齐；启停不抛。"""
+    """18:00 盘后下载 + 18:40 保留期清理 + 盯盘轮询 + A股/港股各自收盘定格与 K 线补齐；启停不抛。"""
     s = PostCloseScheduler(symbols=["600000.SH"], bus=EventBus())
     s.start()
     try:
         jobs = {j.id: j for j in s._scheduler.get_jobs()}
-        assert set(jobs) == {"post_close_refresh", "watch_poll",
+        assert set(jobs) == {"post_close_refresh", "retention_purge", "watch_poll",
                              "watch_freeze_cn", "watch_freeze_hk",
                              "watch_kline_cn", "watch_kline_hk"}
         fields = {f.name: str(f) for f in jobs["post_close_refresh"].trigger.fields}
         assert fields["hour"] == "18" and fields["minute"] == "0"
         assert fields["day_of_week"] in ("mon-fri", "0-4")
+        # 保留期清理不按工作日：库长大不挑日子（周末不跑就永远追不上心跳的行数）
+        r = {f.name: str(f) for f in jobs["retention_purge"].trigger.fields}
+        assert (r["hour"], r["minute"]) == ("18", "40")
         # 收盘定格按市场分开：A股 15:05、港股 16:10（港股收市竞价在 16:00-16:10）
         cn = {f.name: str(f) for f in jobs["watch_freeze_cn"].trigger.fields}
         hk = {f.name: str(f) for f in jobs["watch_freeze_hk"].trigger.fields}
@@ -44,7 +47,9 @@ def test_watch_jobs_follow_the_switch(monkeypatch):
     s = PostCloseScheduler(symbols=["600000.SH"], bus=EventBus())
     s.start()
     try:
-        assert {j.id for j in s._scheduler.get_jobs()} == {"post_close_refresh"}
+        # 保留期清理不属于"盯盘任务"，它跟自动盯盘开关无关——关了盯盘，库照样在长大
+        assert {j.id for j in s._scheduler.get_jobs()} == {"post_close_refresh",
+                                                           "retention_purge"}
     finally:
         s.stop()
 

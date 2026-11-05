@@ -32,6 +32,7 @@ EDITABLE_FIELDS: dict[str, type] = {
     "watchdog_interval_s": float,
     "reconcile_interval_s": float,
     "backtest_async": bool,
+    "log_retention_days": int,
     # —— 软件互操作目录 ——
     "tdx_install_dir": str,
     "ths_install_dir": str,

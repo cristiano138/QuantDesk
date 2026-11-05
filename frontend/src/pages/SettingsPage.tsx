@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiError, getChannels, getSettings, putSettings, type AppSettings, type ChannelsOverview } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 const RISK_CONFIRM_TEXT = '我知晓并承担实盘交易风险'
 
@@ -15,6 +16,8 @@ const NUM_FIELDS: { key: keyof AppSettings; label: string; hint?: string }[] = [
   { key: 'max_daily_orders', label: '日委托数上限（单）', hint: '正整数' },
   { key: 'watchdog_interval_s', label: '通道探活间隔（秒）', hint: '断线重连与探活节奏' },
   { key: 'reconcile_interval_s', label: '对账间隔（秒）', hint: '实盘全量核对周期' },
+  { key: 'log_retention_days', label: '运行噪音保留期（天）',
+    hint: '只清运行日志与对账「本轮无差异」心跳；差异、委托成交持仓、回测明细一律不自动删' },
 ]
 
 const STR_FIELDS: { key: keyof AppSettings; label: string; hint?: string }[] = [
@@ -123,7 +126,7 @@ export default function SettingsPage() {
   if (!s) {
     return (
       <section>
-        <h2>设置</h2>
+        <h2>设置<HelpLink slug="settings" /></h2>
         <p className="placeholder">加载中…</p>
         {err && <p className="badge badge-down">{err}</p>}
       </section>
@@ -135,7 +138,7 @@ export default function SettingsPage() {
 
   return (
     <section>
-      <h2>设置</h2>
+      <h2>设置<HelpLink slug="settings" /></h2>
 
       <HostingHint />
 

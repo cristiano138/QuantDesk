@@ -116,3 +116,54 @@ class ParquetStore:
         if df.empty:
             return None
         return df["dt"].iloc[0], df["dt"].iloc[-1]
+
+    def inventory(self) -> list[dict]:
+        """本地库清单：每个 标的 × 周期 × 复权 一行（行数、起止、文件数、成交额缺失率）。
+
+        只读 dt/amount 两列 + 文件元数据，不整表载入——这一页要一次扫全库，
+        按 read() 那种整表方式会把内存吃掉，而它恰恰是"我本地到底有什么"的唯一入口。
+        amount_zero_pct 是给"免费源没有成交额"这类降级留的可见信号（腾讯日线 amount 恒为 0）。
+        """
+        import pyarrow.parquet as pq
+
+        acc: dict[tuple[str, str, str, str], dict] = {}
+
+        def bucket(parts: list[str]) -> dict:
+            market, symbol, freq, adjust = parts[:4]
+            key = (market, symbol, freq, adjust)
+            return acc.setdefault(key, {"market": market, "symbol": symbol, "freq": freq,
+                                        "adjust": adjust, "rows": 0, "files": 0,
+                                        "bad_files": 0, "start": None, "end": None,
+                                        "amount_zero": 0})
+
+        for path in sorted(self.root.rglob("*.parquet")):
+            parts = path.relative_to(self.root).as_posix().split("/")
+            if len(parts) != 5:
+                continue                      # 目录结构不符（不是本写入器写的）就不猜
+            try:
+                tbl = pq.read_table(path, columns=["dt", "amount"])
+            except Exception:                 # noqa: BLE001 — 单文件坏了不能把整页打死，要计数上报
+                row = bucket(parts)
+                row["bad_files"] += 1
+                continue
+            row = bucket(parts)
+            n = tbl.num_rows
+            row["rows"] += n
+            row["files"] += 1
+            if n:
+                dts = tbl.column("dt").to_pandas()
+                dmin, dmax = str(dts.min())[:19], str(dts.max())[:19]
+                row["start"] = min(x for x in (row["start"], dmin) if x)
+                row["end"] = max(x for x in (row["end"], dmax) if x)
+                amts = tbl.column("amount").to_pandas()
+                row["amount_zero"] += int((amts.isna() | (amts == 0)).sum())
+
+        out = []
+        for row in acc.values():
+            r = dict(row)
+            r["start"] = (r["start"] or "")[:10]
+            r["end"] = (r["end"] or "")[:10]
+            r["amount_zero_pct"] = round(100.0 * r["amount_zero"] / r["rows"], 1) if r["rows"] else 0.0
+            r.pop("amount_zero", None)
+            out.append(r)
+        return sorted(out, key=lambda x: (x["symbol"], x["freq"], x["adjust"]))

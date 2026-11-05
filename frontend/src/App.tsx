@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
-import { api, getHealth, openEvents, type Health } from './api/client'
+import { api, apiError, getHealth, openEvents, type Health } from './api/client'
 import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
 import ChannelsPage from './pages/ChannelsPage'
 import CompliancePage from './pages/CompliancePage'
@@ -15,6 +15,8 @@ const StrategyPage = React.lazy(() => import('./pages/StrategyPage'))
 const BacktestPage = React.lazy(() => import('./pages/BacktestPage'))
 const WatchPage = React.lazy(() => import('./pages/WatchPage'))
 const GuidePage = React.lazy(() => import('./pages/GuidePage'))
+// 手册正文是后端 JSON，组件本身很轻，但仍分包：不进首屏
+const ManualPage = React.lazy(() => import('./pages/ManualPage'))
 
 const NAV = [
   { to: '/watch', label: '实时盯盘' },
@@ -26,6 +28,7 @@ const NAV = [
   { to: '/interop', label: '软件互操作' },
   { to: '/data', label: '数据管理' },
   { to: '/guide', label: '新手指引' },
+  { to: '/manual', label: '使用手册' },
   { to: '/compliance', label: '报备清单' },
   { to: '/settings', label: '设置' },
 ]
@@ -33,6 +36,7 @@ const NAV = [
 function HealthBadge() {
   const [health, setHealth] = useState<Health | null>(null)
   const [err, setErr] = useState('')
+  const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let alive = true
     const load = () =>
@@ -44,7 +48,7 @@ function HealthBadge() {
           }
         })
         .catch((e: unknown) => {
-          if (alive) setErr(e instanceof Error ? e.message : String(e))
+          if (alive) setErr(apiError(e))
         })
     load()
     const t = setInterval(load, 5000)
@@ -52,8 +56,18 @@ function HealthBadge() {
       alive = false
       clearInterval(t)
     }
-  }, [])
-  if (err) return <span className="badge badge-down">后端离线</span>
+  }, [nonce])
+  if (err)
+    return (
+      <>
+        <button className="mini" onClick={() => { setHealth(null); setNonce((v) => v + 1) }}>
+          重试
+        </button>
+        <span className="badge badge-down" style={{ marginLeft: 8 }}>
+          后端离线
+        </span>
+      </>
+    )
   if (!health) return <span className="badge">连接中…</span>
   return (
     <span className={health.simulation_only ? 'badge badge-paper' : 'badge badge-live'}>
@@ -65,6 +79,8 @@ function HealthBadge() {
 export default function App() {
   // 实盘二次确认（D17）：全局监听 confirm_request，服务端强制、前端仅表现层
   const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null)
+  // 确认/拒绝指令送不出服务端时必须让用户看见——这直接关系真实资金
+  const [gateErr, setGateErr] = useState('')
   useEffect(
     () =>
       openEvents((data) => {
@@ -92,8 +108,12 @@ export default function App() {
       if (decision === 'expired') return // 服务端超时自会作废
       try {
         await api.post(`/trading/orders/${encodeURIComponent(orderId)}/${decision}`)
-      } catch {
-        /* 结果以订单状态为准 */
+        setGateErr('')
+      } catch (e) {
+        setGateErr(
+          `「${decision === 'confirm' ? '确认' : '拒绝'}」指令没送达服务端（委托 ${orderId}）：${apiError(e)}` +
+            '——该单仍未生效，可在「实盘监控」页核对状态；10 秒内未确认的待确认单会自动作废。',
+        )
       }
     },
     [],
@@ -114,12 +134,28 @@ export default function App() {
         <header>
           <HealthBadge />
         </header>
+        {gateErr && (
+          <div style={{ padding: '0 20px' }}>
+            <div className="alert-banner">
+              <p>
+                <b>二次确认未完成：</b>
+                {gateErr}
+              </p>
+              <p>
+                <button className="mini" onClick={() => setGateErr('')}>
+                  知道了
+                </button>
+              </p>
+            </div>
+          </div>
+        )}
         <React.Suspense fallback={<section><p className="placeholder">页面加载中…</p></section>}>
           <Routes>
             <Route path="/" element={<MarketPage />} />
             <Route path="/market" element={<MarketPage />} />
             <Route path="/watch" element={<WatchPage />} />
             <Route path="/guide" element={<GuidePage />} />
+            <Route path="/manual" element={<ManualPage />} />
             <Route path="/strategy" element={<StrategyPage />} />
             <Route path="/backtest" element={<BacktestPage />} />
             <Route path="/monitor" element={<MonitorPage />} />

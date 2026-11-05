@@ -36,6 +36,9 @@ _MIN_COLMAP = {
     "时间": "dt", "开盘": "open", "收盘": "close", "最高": "high",
     "最低": "low", "成交量": "volume", "成交额": "amount",
 }
+# 财务三表（新浪）：表种 → 新浪接口的 symbol 参数；摘要（东财）另走一条路
+_FIN_SINA = {"income": "利润表", "balance": "资产负债表", "cashflow": "现金流量表"}
+_FIN_PERIODS = 8            # 长表只留最近 8 期（新浪单张表有 100+ 期，全给会把响应撑爆）
 _PERIOD_DAILY = {Frequency.D1: "daily", Frequency.W1: "weekly", Frequency.MO1: "monthly"}
 _PERIOD_MIN = {Frequency.M1: "1", Frequency.M5: "5", Frequency.M15: "15",
                Frequency.M30: "30", Frequency.H1: "60"}
@@ -166,18 +169,68 @@ class AkshareFeed(DataFeedAdapter):
         raise FeedCapabilityError(f"AKShare 不支持周期 {freq}")
 
     def get_financial_data(self, symbol: str, report_type: str = "income") -> pd.DataFrame:
-        """W1 简化：返回财务摘要长表（报告期 × 指标）。
+        """财务数据：三表走新浪（真按表种取），摘要走东财（指标合表）。
 
-        report_type 仅校验取值并打标；报表级拆分与降级链在 FederatedFeed 与
-        W6 iFinD 接入时完善。
+        以前 income/balance/cashflow 三种都返回同一张东财摘要，只把 report_type 打了个标——
+        界面上挂"利润表/资产负债表/现金流量表"三个页签就成了假拆分（数字一模一样）。
+        现在表种真的不同；要"比率/每股"这类衍生指标看 indicator（东财摘要）。
+
+        统一长表形状：symbol / report_type / 选项 / 指标 / <YYYYMMDD 各期>。
+        三表在新浪是"行=报告期、列=科目"，这里转置成同样的形状，服务层只认一种结构。
         """
         if report_type not in ("income", "balance", "cashflow", "indicator"):
             raise FeedCapabilityError(f"未知 report_type: {report_type}")
         code = from_internal(symbol, "akshare")
-        raw = self._call(lambda: self._ak().stock_financial_abstract(symbol=code))
-        if raw is None or raw.empty:
+
+        if report_type == "indicator":
+            raw = self._call(lambda: self._ak().stock_financial_abstract(symbol=code))
+            if raw is None or raw.empty:
+                return pd.DataFrame()
+            out = raw.copy()
+            out.insert(0, "report_type", report_type)
+            out.insert(0, "symbol", symbol)
+            return out
+
+        table = _FIN_SINA[report_type]
+        sina_code = self._sina_code(symbol)
+        raw = self._call(lambda: self._ak().stock_financial_report_sina(
+            stock=sina_code, symbol=table))
+        return self._sina_to_long(raw, symbol, report_type, table)
+
+    @staticmethod
+    def _sina_code(symbol: str) -> str:
+        """600000.SH → sh600000（新浪口径要市场前缀）。新浪这条路不覆盖港股，如实拒绝。"""
+        from quantdesk.core.symbols import normalize
+
+        internal = normalize(symbol)
+        suffix = internal.rsplit(".", 1)[-1].lower()
+        if suffix == "hk":
+            raise FeedCapabilityError(
+                f"新浪财务三表只覆盖 A股（{internal}）；港股财务请用 iFinD（付费）")
+        return f"{suffix}{internal.split('.')[0]}"
+
+    @staticmethod
+    def _sina_to_long(raw: pd.DataFrame | None, symbol: str,
+                      report_type: str, table: str) -> pd.DataFrame:
+        """行=报告期、列=科目 → 长表（每个科目一行，各期一列），值统一转数值。"""
+        if raw is None or raw.empty or "报告日" not in raw.columns:
             return pd.DataFrame()
-        out = raw.copy()
+        periods = [str(p) for p in raw["报告日"].tolist()][:_FIN_PERIODS]
+        idx = raw["报告日"].astype(str)
+        rows = []
+        for col in raw.columns:
+            if col == "报告日":
+                continue
+            values: dict[str, float] = {}
+            for p in periods:
+                cell = pd.to_numeric(raw.loc[idx == p, col], errors="coerce")
+                values[p] = None if cell.empty or pd.isna(cell.iloc[0]) else float(cell.iloc[0])
+            if all(v is None for v in values.values()):
+                continue      # 最近几期全未披露的科目不占屏（缺期在摘要里也看不到）
+            rows.append({"选项": f"{table}科目", "指标": str(col), **values})
+        if not rows:
+            return pd.DataFrame()
+        out = pd.DataFrame(rows)
         out.insert(0, "report_type", report_type)
         out.insert(0, "symbol", symbol)
         return out

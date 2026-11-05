@@ -208,3 +208,185 @@ def test_loop_runs_periodically_and_stops(db, monkeypatch):
     svc.stop()
     assert svc.status()["running"] is False
     assert svc.last_result["diffs"] == 1
+
+
+# ---------------- 处置闭环与升级补列 ----------------
+
+def test_diff_can_be_resolved_and_reopened(db):
+    """差异要能认领并留下结论：只列不处置，红条会变成噪音，真差异反而没人看。"""
+    repo.reconcile_record([{"kind": "order_missing", "ref": "OD-9",
+                            "detail": {"local": "FILLED", "broker": None}}],
+                          channel="paper", ran_at=1730000000000, db_path=db)
+    rows = repo.reconcile_recent(db_path=db)
+    did = rows[0]["id"]
+    assert rows[0]["resolved"] is False and rows[0]["resolve_note"] == ""
+
+    done = repo.reconcile_resolve(did, note="券商回报晚到，本地已补齐", db_path=db)
+    assert done["resolved"] is True and "回报晚到" in done["resolve_note"]
+    assert repo.reconcile_recent(db_path=db, unresolved_only=True) == []
+    assert len(repo.reconcile_recent(db_path=db)) == 1        # 已处置仍在档案里，不消失
+
+    back = repo.reconcile_resolve(did, resolve=False, db_path=db)
+    assert back["resolved"] is False and back["resolved_at"] == 0
+
+
+def test_service_status_counts_only_open_diffs(db):
+    repo.reconcile_record([{"kind": "order_missing", "ref": "A", "detail": {}},
+                           {"kind": "position_mismatch", "ref": "B", "detail": {}}],
+                          channel="paper", db_path=db)
+    svc = ReconcileService(bus=EventBus(), db_path=db)
+    assert svc.status()["open"] == 2
+    open_rows = svc.open_diffs()
+    svc.resolve(open_rows[0]["id"], note="已核对")
+    assert svc.status()["open"] == 1
+    assert [d["kind"] for d in svc.open_diffs()] == [d["kind"] for d in open_rows[1:]]
+
+
+def test_resolve_unknown_id_is_404(db, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from quantdesk.app import app
+
+    svc = ReconcileService(bus=EventBus(), db_path=db)
+    monkeypatch.setattr("quantdesk.services.reconcile.get_reconcile_service", lambda: svc)
+    client = TestClient(app)
+    r = client.post("/api/channels/reconcile/999999/resolve", json={"note": "x"})
+    assert r.status_code == 404 and "不存在" in r.json()["detail"]
+
+
+def test_old_database_gets_new_columns_without_losing_rows(tmp_path):
+    """升级纪律：SQLModel 的 create_all 只建表不加列。
+
+    老库缺列的话，新代码第一次 SELECT 就报 no such column——用户数据没坏，
+    但软件直接打不开。ensure_columns 负责补齐，且不许动已有行。
+    """
+    import sqlite3
+
+    from quantdesk.store.db import ensure_columns, get_engine
+
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.executescript(
+        "CREATE TABLE reconcile_diff (id INTEGER PRIMARY KEY, ran_at INTEGER, channel TEXT,"
+        " kind TEXT, ref TEXT, detail_json TEXT, created_at INTEGER);"
+        "INSERT INTO reconcile_diff (ran_at, channel, kind, ref, detail_json, created_at)"
+        " VALUES (1730000000000,'paper','order_missing','OD-1','{\"local\":\"FILLED\"}',1);"
+    )
+    con.commit()
+    con.close()
+
+    engine = get_engine(path)
+    added = ensure_columns(engine)
+    assert "reconcile_diff.resolved" in added
+    assert ensure_columns(engine) == []               # 幂等：第二次什么都不做
+
+    con = sqlite3.connect(path)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(reconcile_diff)")}
+    rows = list(con.execute("SELECT id, ref, resolved, resolve_note FROM reconcile_diff"))
+    con.close()
+
+    assert {"resolved", "resolve_note", "resolved_at"} <= cols
+    assert rows == [(1, "OD-1", 0, "")]               # 老行还在，新列取默认值
+    # 补齐后 ORM 读得动，且这条差异真的算"未处置"
+    assert [d["ref"] for d in repo.reconcile_recent(db_path=path, unresolved_only=True)] == ["OD-1"]
+
+
+def test_ensure_columns_is_no_op_on_fresh_database(tmp_path):
+    from quantdesk.store.db import ensure_columns, get_engine, init_db
+
+    path = init_db(tmp_path / "fresh.db")
+    assert ensure_columns(get_engine(path)) == []
+
+
+def test_ensure_columns_is_no_op_on_fresh_database(tmp_path):
+    from quantdesk.store.db import ensure_columns, get_engine, init_db
+
+    path = init_db(tmp_path / "fresh.db")
+    assert ensure_columns(get_engine(path)) == []
+
+
+# ==================================================== 保留期与"心跳不是差异"
+#
+# 界面实测翻出来的：对账每 30s 落一条 kind="clean"（无差异也是审计证据，这是刻意的），
+# 但读取侧把它一起算进了「待处置 N 项」——装机半小时后对账页 137 行全是心跳、
+# 红条写着"待处置 137"，而那时一条真事故都没有。噪音会把真事故淹掉。
+
+def test_clean_heartbeats_are_never_counted_as_open_diffs(db):
+    for _ in range(3):
+        assert _svc(StubLive(), db).run_once()["diffs"] == 0
+    _svc(StubLive(orders=[_order()]), db).run_once()          # 一轮真差异
+
+    svc = _svc(StubLive(), db)
+    open_rows = svc.open_diffs(limit=100)
+    assert len(open_rows) == 1, f"待处置只该有那 1 条真差异，实际 {open_rows}"
+    assert open_rows[0]["kind"] == "order_missing_local"
+    assert svc.status()["open"] == 1, "红条计数按心跳增长＝红条失去意义"
+
+    only_diffs = svc.recent_diffs(limit=50, diffs_only=True)
+    assert all(r["kind"] != "clean" for r in only_diffs)
+    audit = svc.recent_diffs(limit=50, diffs_only=False)
+    assert any(r["kind"] == "clean" for r in audit), "审计视角仍要能看到每轮无差异的记录"
+
+
+def test_retention_purge_deletes_only_old_clean_heartbeats(db):
+    """保留期前的旧心跳删掉；旧真差异一行都不许动（事故档案不许被定时任务删）。"""
+    import time
+
+    from quantdesk.store.db import get_session
+    from quantdesk.store.models_db import ReconcileDiffRow
+    from sqlmodel import select
+
+    old = int((time.time() - 400 * 86400) * 1000)
+    recent = int(time.time() * 1000)
+    with get_session(db) as s:
+        s.add(ReconcileDiffRow(ran_at=old, channel="qmt", kind="clean", detail_json="{}"))
+        s.add(ReconcileDiffRow(ran_at=old, channel="qmt", kind="clean", detail_json="{}"))
+        s.add(ReconcileDiffRow(ran_at=old, channel="qmt", kind="position_mismatch",
+                               ref="600000.SH", detail_json="{}"))
+        s.add(ReconcileDiffRow(ran_at=recent, channel="qmt", kind="clean", detail_json="{}"))
+        s.commit()
+
+    deleted = repo.reconcile_purge(int((time.time() - 90 * 86400) * 1000), db_path=db)
+    assert deleted == 2, f"应只删掉两条过期心跳，实际 {deleted}"
+    with get_session(db) as s:
+        kinds = [(r.kind, r.ran_at == old) for r in s.exec(select(ReconcileDiffRow)).all()]
+    assert ("position_mismatch", True) in kinds, "过期真差异被删了——事故档案不许自动清理"
+    assert ("clean", False) in kinds, "保留期内的心跳不该被清掉"
+
+
+def test_retention_job_reports_counts(tmp_path, monkeypatch):
+    from quantdesk.config import get_settings
+    from quantdesk.services.scheduler import PostCloseScheduler
+
+    reset_engine()
+    monkeypatch.setenv("QUANTDESK_DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    init_db()
+    events = []
+    sched = PostCloseScheduler(bus=SimpleNamespace(publish=events.append))
+    out = sched.retention_job()
+    assert out["days"] >= 1 and isinstance(out["logs"], int) and isinstance(out["clean_diffs"], int)
+    assert "error" not in out, out
+    assert any("保留期清理" in str(e.data.get("message", "")) for e in events), \
+        "清理动作要广播出去，不然库变小这件事没人知道"
+    reset_engine()
+    get_settings.cache_clear()
+
+
+def test_diffs_only_honoured_on_both_branches(db, monkeypatch):
+    """`diffs_only` 不许在「只看未处置」分支被静默忽略——界面上那个勾点了要有反应。"""
+    import quantdesk.api.routes_channels as api_ch
+    import quantdesk.services.reconcile as rc
+
+    _svc(StubLive(), db).run_once()                       # 一轮无差异 → 落 clean
+    _svc(StubLive(orders=[_order()]), db).run_once()      # 一轮真差异
+    svc = _svc(StubLive(), db)
+    monkeypatch.setattr(rc, "_service", svc)
+
+    default = api_ch.reconcile_state(limit=50, unresolved_only=True, diffs_only=True)
+    assert all(x["kind"] != "clean" for x in default["diffs"]), default["diffs"]
+    assert default["status"]["open"] == 1, "红条计数按差异算，不按心跳算"
+
+    audit = api_ch.reconcile_state(limit=50, unresolved_only=True, diffs_only=False)
+    assert any(x["kind"] == "clean" for x in audit["diffs"]), \
+        "同一份数据、同一个参数，两条分支口径必须一致（一处生效一处忽略＝接口在骗调用方）"

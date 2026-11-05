@@ -11,6 +11,7 @@ import {
   putCredential,
   putSettings,
   runReconcile,
+  resolveReconcileDiff,
   type AppSettings,
   type ChannelInfo,
   type ChannelsOverview,
@@ -18,6 +19,7 @@ import {
   type RealtimeState,
   type ReconcileDiff,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 const RISK_CONFIRM_TEXT = '我知晓并承担实盘交易风险'
 
@@ -42,6 +44,8 @@ const KIND_LABEL: Record<string, string> = {
   trade_missing_local: '券商有成交、本地无记录',
   position_mismatch: '持仓不一致',
   account_mismatch: '资金不一致',
+  // 每轮无差异也落一条：它是审计证据，不是差异，所以不给「标为已处置」
+  clean: '本轮无差异（审计记录）',
 }
 
 function lampClass(c: ChannelInfo): string {
@@ -234,21 +238,26 @@ function ReconcileSection() {
   const [status, setStatus] = useState<ChannelsOverview['reconcile'] | null>(null)
   const [running, setRunning] = useState(false)
   const [err, setErr] = useState('')
+  const [onlyOpen, setOnlyOpen] = useState(true)
+  const [includeClean, setIncludeClean] = useState(false)
+  const [notes, setNotes] = useState<Record<number, string>>({})
+  const [busy, setBusy] = useState<number | null>(null)
 
   const refresh = useCallback(() => {
-    return getReconcile()
+    return getReconcile(200, onlyOpen, !includeClean)
       .then((d) => {
         setDiffs(d.diffs)
         setStatus(d.status)
       })
       .catch((e: unknown) => setErr(apiError(e)))
-  }, [])
+  }, [onlyOpen, includeClean])
 
   useEffect(() => {
     refresh()
     return openEvents((data) => {
       const d = data as { type?: string; data?: { action?: string } }
       if (d?.type === 'risk' && d.data?.action === 'reconcile_diff') refresh()
+      if (d?.type === 'risk' && d.data?.action === 'reconcile_resolved') refresh()
     })
   }, [refresh])
 
@@ -265,6 +274,20 @@ function ReconcileSection() {
     }
   }
 
+  const mark = async (id: number, resolve: boolean) => {
+    setBusy(id)
+    setErr('')
+    try {
+      await resolveReconcileDiff(id, notes[id] ?? '', resolve)
+      setNotes((cur) => ({ ...cur, [id]: '' }))
+      await refresh()
+    } catch (e) {
+      setErr(apiError(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   return (
     <div className="card">
       <h3>对账</h3>
@@ -274,12 +297,23 @@ function ReconcileSection() {
           {' '}· 通道 {status.channel || '—'} · 周期 {status.interval_s}s ·
           {status.running ? ' 运行中' : ' 未运行'}
           {status.diffs != null ? ` · 本轮差异 ${status.diffs} 项` : ''}
+          {status.open != null ? ` · 待处置 ${status.open} 项` : ''}
           {status.skipped ? ` · 跳过原因：${status.skipped}` : ''}
         </p>
       )}
-      <button className="mini" disabled={running} onClick={runNow}>
-        {running ? '对账中…' : '立即对账'}
-      </button>
+      <div className="row-btns" style={{ gap: 8 }}>
+        <button className="mini" disabled={running} onClick={runNow}>
+          {running ? '对账中…' : '立即对账'}
+        </button>
+        <button className="mini" onClick={() => setOnlyOpen((v) => !v)}>
+          {onlyOpen ? '看全部（含已处置）' : '只看未处置'}
+        </button>
+        <label className="mini" title="每轮对账即使无差异也落一条记录（审计证据）；默认不显示，否则列表被心跳淹没">
+          <input type="checkbox" checked={includeClean}
+                 onChange={(e) => setIncludeClean(e.target.checked)} />
+          {' '}含每轮无差异记录
+        </label>
+      </div>
       {err && <p className="badge badge-down">{err}</p>}
       {diffs.length > 0 ? (
         <table>
@@ -289,6 +323,7 @@ function ReconcileSection() {
               <th>类型</th>
               <th>对象</th>
               <th>通道</th>
+              <th>处置</th>
               <th />
             </tr>
           </thead>
@@ -300,6 +335,35 @@ function ReconcileSection() {
                 <td>{d.ref}</td>
                 <td>{d.channel}</td>
                 <td>
+                  {d.kind === 'clean' ? (
+                    <span className="sub-note">—（本轮无差异，无需处置）</span>
+                  ) : d.resolved ? (
+                    <span className="sub-note">
+                      已处置{d.resolve_note ? `：${d.resolve_note}` : ''}
+                      <button className="mini" disabled={busy === d.id} onClick={() => void mark(d.id, false)}>
+                        退回
+                      </button>
+                    </span>
+                  ) : (
+                    <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        placeholder="核实结论（可留空）"
+                        value={notes[d.id] ?? ''}
+                        onChange={(e) => setNotes((cur) => ({ ...cur, [d.id]: e.target.value }))}
+                        style={{ width: 160 }}
+                      />
+                      <button
+                        className="mini"
+                        disabled={busy === d.id}
+                        onClick={() => void mark(d.id, true)}
+                        title="标为已处置：这条差异有人认领并给出了结论，红条不再统计它"
+                      >
+                        标为已处置
+                      </button>
+                    </span>
+                  )}
+                </td>
+                <td>
                   <details>
                     <summary>展开</summary>
                     <pre className="logs">{JSON.stringify(d.detail, null, 2)}</pre>
@@ -310,7 +374,11 @@ function ReconcileSection() {
           </tbody>
         </table>
       ) : (
-        <p className="placeholder">暂无差异记录。</p>
+        <p className="placeholder">
+          {onlyOpen
+            ? '没有待处置的差异。已处置的记录点「看全部（含已处置）」回看——差异要留档，不能处置完就消失。'
+            : '暂无差异记录（还没跑过对账的话，点上面「立即对账」）。'}
+        </p>
       )}
     </div>
   )
@@ -406,7 +474,7 @@ export default function ChannelsPage() {
   if (!ov) {
     return (
       <section>
-        <h2>通道</h2>
+        <h2>通道<HelpLink slug="channels" /></h2>
         <p className="placeholder">加载中…</p>
         {err && <p className="badge badge-down">{err}</p>}
       </section>
@@ -419,7 +487,7 @@ export default function ChannelsPage() {
 
   return (
     <section>
-      <h2>通道</h2>
+      <h2>通道<HelpLink slug="channels" /></h2>
 
       <div className="card">
         <div className="row-btns">

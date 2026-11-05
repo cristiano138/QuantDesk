@@ -49,6 +49,8 @@ class FederatedFeed(DataFeedAdapter):
         self._refs: dict[str, set[str]] = {}
         self._callbacks: dict[str, dict[str, Callable[[Tick | Bar], None]]] = {}
         self._rt_lock = threading.RLock()
+        # 观测用：上一次财务调用真正应答的源名（界面要写"数据来自哪"，不能靠猜）
+        self.last_financial_source = ""
 
     # ---------- 能力 ----------
     @property
@@ -129,7 +131,10 @@ class FederatedFeed(DataFeedAdapter):
             if FeedCapability.FINANCIAL not in feed.capabilities:
                 continue
             try:
-                return feed.get_financial_data(symbol, report_type)
+                df = feed.get_financial_data(symbol, report_type)
+                # 谁答的要能回显：界面写"数据来自哪"不能靠猜（口径可追溯）
+                self.last_financial_source = getattr(feed, "name", "unknown")
+                return df
             except FeedCapabilityError as e:
                 last = e
                 log.info("财务降级: %s 不可用 → 下一源", getattr(feed, "name", feed))

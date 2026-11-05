@@ -40,6 +40,10 @@ class PostCloseScheduler:
         self._scheduler.add_job(
             self.refresh_job, "cron", hour=18, minute=0, day_of_week="mon-fri",
             id="post_close_refresh", replace_existing=True)
+        # 每天 18:40 清一次运行噪音（周末也跑：库不挑日子长大）
+        self._scheduler.add_job(
+            self.retention_job, "cron", hour=18, minute=40,
+            id="retention_purge", replace_existing=True)
         s = get_settings()
         watch_jobs = []
         if getattr(s, "watch_enabled", True):
@@ -182,6 +186,31 @@ class PostCloseScheduler:
         self._publish(f"盘后刷新完成：成功 {ok}/{len(syms)}，增量 {rows} 行"
                       + (f"，失败 {failed}" if failed else ""))
         return self.last_result
+
+    def retention_job(self) -> dict:
+        """按保留期清理运行噪音（run_log + 对账无差异心跳行）。
+
+        这一步不是可选优化：对账 30s 一条、日志逐条落库，装机跑满一年就是几十万行，
+        库变大、翻页变慢、真正要看的差异被埋在中间。清理范围严格限定在"运行噪音"：
+        差异行、回测运行与明细、委托成交持仓一律不删（事故档案不许被定时任务删掉）。
+        """
+        from quantdesk.config import get_settings
+        from quantdesk.store import repo
+
+        days = max(1, int(get_settings().log_retention_days or 90))
+        cutoff = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+        out = {"ran_at": datetime.now().isoformat(), "days": days,
+               "cutoff": cutoff, "logs": 0, "clean_diffs": 0}
+        try:
+            out["logs"] = repo.logs_purge(cutoff)
+            out["clean_diffs"] = repo.reconcile_purge(cutoff)
+        except Exception as e:                        # noqa: BLE001 清理失败不影响主链路
+            out["error"] = f"{e.__class__.__name__}: {e}"
+            log.exception("保留期清理失败")
+        self._publish(f"保留期清理（{days} 天）：运行日志 {out['logs']} 条、"
+                      f"对账无差异心跳 {out['clean_diffs']} 条"
+                      + (f"，失败：{out['error']}" if out.get("error") else ""))
+        return out
 
     def _publish(self, message: str) -> None:
         if self.bus is not None:

@@ -70,6 +70,8 @@ class BacktestResult:
     logs: list[str] = field(default_factory=list)
     bars: int = 0
     config: dict = field(default_factory=dict)
+    cancelled: bool = False                     # 用户中途取消（bars 为部分结果）
+    planned_bars: int = 0                       # 本次原计划要处理的 bar 数（取消说明用）
 
 
 class _PendingOrder:
@@ -150,11 +152,17 @@ class BacktestEngine:
         self._seq = 0
 
     # ---------- 对外 ----------
-    def run(self, on_progress=None) -> BacktestResult:
+    def run(self, on_progress=None, should_stop=None) -> BacktestResult:
         """执行回测。
 
         on_progress(done, total)：供服务层发布进度事件（异步队列化的前提）。
         节流由调用方决定——引擎只负责按 bar 汇报，不做 I/O。
+
+        should_stop() -> bool：取消检查钩子（服务层传 threading.Event.is_set）。
+        在**每根 bar 处理的开头**检查，命中就停下——一根 bar 之内不做半截撮合，
+        所以拿到的是一个「截至上一根 bar 的完整状态」，成交/委托/持仓不会自相矛盾。
+        取消不是异常：正常收尾（策略 on_stop、未成交委托按撤单处理），
+        结果里 cancelled=True，由服务层决定记 cancelled 状态而不是 completed。
         """
         self._data = self.feed.load(self.cfg.symbols, self.freq,
                                     self.cfg.start, self.cfg.end, self.cfg.adjust)
@@ -165,8 +173,13 @@ class BacktestEngine:
 
         equity_rows: list[dict] = []
         n = 0
+        cancelled = False
         last_dt: pd.Timestamp | None = None
         for dt, symbol, row in stream:
+            if should_stop is not None and should_stop():
+                cancelled = True
+                self._log(f"收到取消请求，已在第 {n} 根 bar 后安全停下（计划 {total} 根）")
+                break
             if dt < self.clock:
                 raise ValueError(f"bar 时间非单调: {dt} < {self.clock}（symbol={symbol}）")
             self.clock = dt.to_pydatetime()
@@ -185,12 +198,13 @@ class BacktestEngine:
                 on_progress(n, total)
 
         self.strategy.on_stop()
-        # 收尾：未成交委托按撤单处理（回测结束语义）
+        # 收尾：未成交委托按撤单处理（回测结束语义；取消的运行时说明是取消而非跑完）
+        end_note = "回测取消未成交撤单" if cancelled else "回测结束未成交撤单"
         for po in self._pending:
             o = po.order
             if o.status in (OrderStatus.SUBMITTED, OrderStatus.PART_FILLED):
                 o.status = OrderStatus.CANCELLED
-                o.message = (o.message or "") + "回测结束未成交撤单"
+                o.message = (o.message or "") + end_note
                 o.updated_at = int(last_dt.timestamp() * 1000) if last_dt is not None else 0
         equity = pd.DataFrame(equity_rows)
         if not equity.empty:
@@ -201,6 +215,8 @@ class BacktestEngine:
             trades=self._trades,
             logs=self._logs,
             bars=n,
+            cancelled=cancelled,
+            planned_bars=total,
             config={
                 "symbols": list(self.cfg.symbols), "freq": self.freq.value,
                 "start": self.cfg.start, "end": self.cfg.end,

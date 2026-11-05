@@ -182,3 +182,21 @@ def test_backtest_run_lifecycle(db):
     repo.backtest_finish(run_id, metrics_json='{"total_return":0.12}', db_path=db)
     row = repo.backtest_get(run_id, db_path=db)
     assert row.status == "completed" and row.finished_at is not None
+
+
+def test_default_data_dir_never_points_at_the_workspace():
+    """看门狗：默认数据目录必须落在临时区，不在工作区里。
+
+    这条不测任何业务，只钉住一轮真实事故——测试夹具漏隔离时，合成 LOG 事件、
+    paper 账户与假日志会写进开发库的 `data/quantdesk.db`（本机实测多出 181 行测试
+    痕迹才被发现）。conftest 的全局隔离被删掉或有人新增一条绕过它的路径时，
+    这条先红，而不是等用户打开日志页看见一堆假数据。
+    """
+    from quantdesk.store.db import default_db_path
+
+    workspace = Path(__file__).resolve().parents[1]
+    p = default_db_path().resolve()
+    assert workspace not in p.parents, f"默认库写进了工作区：{p}（应被 tests/conftest.py 隔离）"
+    parquet_root = (workspace / "data" / "parquet").resolve()
+    assert p != (workspace / "data" / "quantdesk.db").resolve()
+    assert not str(p).startswith(str(parquet_root.parent)), "Parquet/库根目录都必须在临时区"

@@ -80,11 +80,36 @@ def erase_credential(key: str) -> dict:
 
 # ---------- 对账 ----------
 @router.get("/reconcile")
-def reconcile_state(limit: int = 100) -> dict:
+def reconcile_state(limit: int = 100, unresolved_only: bool = False,
+                    diffs_only: bool = True) -> dict:
+    """对账差异。
+
+    `diffs_only=True`（默认）：只给真正的差异，排除每轮无差异时落的 `kind="clean"`
+    审计行——不排除的话「待处置」按 30s 一轮心跳涨，一天两千多条，真差异看不见。
+    要看完整审计流水（含每轮无差异的记录）传 `diffs_only=false`。
+    """
     from quantdesk.services.reconcile import get_reconcile_service
 
     svc = get_reconcile_service()
-    return {"status": svc.status(), "diffs": svc.recent_diffs(limit=limit)}
+    diffs = (svc.open_diffs(limit=limit, diffs_only=diffs_only) if unresolved_only
+             else svc.recent_diffs(limit=limit, diffs_only=diffs_only))
+    return {"status": svc.status(), "diffs": diffs}
+
+
+class ResolveRequest(BaseModel):
+    note: str = Field(default="", max_length=200, description="一句话结论：核实后是什么原因/怎么处置的")
+    resolve: bool = Field(default=True, description="true=标为已处置，false=退回未处置")
+
+
+@router.post("/reconcile/{diff_id}/resolve")
+def reconcile_resolve(diff_id: int, req: ResolveRequest) -> dict:
+    """对账差异处置闭环：监控页的红条要能认领并留下结论，不是列着一排"待处理"变噪音。"""
+    from quantdesk.services.reconcile import get_reconcile_service
+
+    row = get_reconcile_service().resolve(diff_id, note=req.note, resolve=req.resolve)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"差异记录 {diff_id} 不存在")
+    return row
 
 
 @router.post("/reconcile/run")

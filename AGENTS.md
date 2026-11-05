@@ -59,17 +59,20 @@ federated 降级路由（以上 SDK 全为**可选依赖**，不进 pyproject，
 
 ## 架构分层与职责
 
-- UI 层 frontend/src：实时盯盘(/watch，A股+港股只读) / 新手指引(/guide，术语库) / 行情面板 /  
-  策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 / 报备清单 / 设置（全局模拟盘开关）
+- UI 层 frontend/src：实时盯盘(/watch，A股+港股只读) / 新手指引(/guide，术语库) / 使用手册(/manual) /  
+  行情面板 / 策略工作台(Monaco) / 回测报告 / 实盘监控 / 数据管理 / 报备清单 / 设置（全局模拟盘开关）
 - API 网关层 quantdesk/api：routes\_* + ws.py（/ws/events 统一事件流）；只依赖 services  
-  （routes_channels 通道全景/探活/凭据/对账 · routes_interop 板块与公式互操作 ·  
-  routes_system 日志检索与 adapters · routes_backtest 同步+异步队列与进度 ·  
+  （routes_channels 通道全景/探活/凭据/对账/差异认领 · routes_interop 板块与公式互操作 ·  
+  routes_system 日志检索与 adapters · routes_backtest 同步+异步队列/进度/取消/明细回看 ·  
+  routes_data 降级链自述+下载任务+本地盘点 · routes_manual 页面使用手册（正文只在服务端）·  
   routes_watch 盯盘池/刷新/详情/逐笔/K线/历史定格（**无任何下单入口**）· routes_guide 术语检索）
 - 服务层 quantdesk/services：market_data / trading / strategy_mgr / backtest_svc / data_store  
   （含 **backfill()：只补缺不覆盖 + 写入后自检**）· **watch（只读盯盘：时段表 A股/港股分开、  
   买卖量主口径=官方内外盘、逐笔只做分层与明细、方向码每日校准且只在置信时缓存、  
-  休市不外呼 + TTL 缓存 + 收盘定格落 daily_flow）** · **guide（101 条术语 × 10 类，  
-  import 期自检重复 slug / 未知分类 / 关联断链）**  
+  休市不外呼 + TTL 缓存 + 收盘定格落 daily_flow）** · **guide（103 条术语 × 10 类，  
+  import 期自检重复 slug / 未知分类 / 关联断链）** · **manual（13 个页面板块的使用手册，  
+  正文只放后端一份，前端 HelpLink 只带 slug，避免文案漂移成两套事实）** ·  
+  **backtest_svc（异步队列 + 取消 + 明细分块落库 backtest_detail + 空跑提示）**  
   · **channels（ChannelHub 按配置动态装配：实时主源单一/历史降级链/凭据缺失 fail-closed/  
   实盘通道惰性解析+15s 冷却）** · **realtime（RealtimePump：订阅上行→行情下行→意图过闸→回报回投）** ·  
   **reconcile（周期对账：通道快照 vs SQLite，差异落 reconcile_diff + RISK 广播）** ·  
@@ -92,11 +95,15 @@ federated 降级路由（以上 SDK 全为**可选依赖**，不进 pyproject，
   + brokers/（paper_broker · qmt_broker · gm_broker · easytrader_broker）  
   · 注册表自动扫描（模块级 `ADAPTER` 导出才登记；SDK 缺失 → 状态 `unready` 如实上报而非隐藏；  
   `default_enabled=False` → **注册表源头不可见**，只有设置页打开 enable_flag 才进入交易 API 视野）
-- 存储层 quantdesk/store：db.py(SQLite WAL) / models_db.py（strategies / orders / trades /  
-  positions_snapshot / watchlist / compliance / backtest_runs / **reconcile_diff** / **run_log** /  
+- 存储层 quantdesk/store：db.py(SQLite WAL，**ensure_columns 增量迁移**——老库直接启动也能补列) /  
+  models_db.py（strategies / orders / trades / positions_snapshot / watchlist / compliance /  
+  backtest_runs / **backtest_detail（按 kind 分块 200 行，`(run_id,kind,seq)` 唯一）** /  
+  **reconcile_diff（含差异认领：note / resolved_at）** / **run_log** /  
   **daily_flow（当日买卖量收盘定格）**）/  
   parquet_store.py（data/parquet/{market}/{symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线按月分文件；  
-  db 路径惰性取 settings.data_dir）
+  db 路径惰性取 settings.data_dir）  
+  · **测试隔离在 tests/conftest.py 强制**：会话级换 `QUANTDESK_DATA_DIR` + 重建默认库，  
+  函数级清 settings 缓存与引擎——任何用例都不许碰真实 `data/`
 - 用户策略 strategies/：只依赖 BaseStrategy；引擎 importlib 动态加载
 
 ## 核心契约（必须原样实现，不得改名或删减字段）
@@ -238,7 +245,7 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
 - **每日自动**：盘中 `watch_poll` → 15:05/16:10 定格当日买卖量（`daily_flow`）→
   15:25/16:25 自动回补日 K（`data_store.backfill()`：只补缺、不覆盖、写入后自检）。
   **休市时自动路径零外呼**（面板显示"休市中：未外呼"），只有手动刷新 `force` 才打。
-- **新手指引 `/guide`**：101 条术语 × 10 类，每条含一句话/展开/算例/常见误解/在哪能看到/关联，
+- **新手指引 `/guide`**：103 条术语 × 10 类，每条含一句话/展开/算例/常见误解/在哪能看到/关联，
   import 期自检重复 slug、未知分类与断链（内容型数据坏了只会静默缺条）。
 - **本轮查出 16 处缺陷**（逐个有回归锁，详见进度日志）：其中 2 处属"图上看起来一切正常"——
   ① 东财 `klt` 分钟数写成秒（M5 静默返回 60 分钟线）；② 港股 `f51/f52` 实为 52 周高/低却输出成
@@ -250,3 +257,28 @@ ZMQ IPC 桥（往返 P95≈0.55ms）/ 守护进程+生命周期门禁 / RiskGate
 - 新增文档：`docs/integration/tx_quote.md`、`docs/integration/em_quote.md`（含真机回显与在线核对清单）。
 - **诚实限制**：两市收盘时才交付，**盘中实时跳动尚未真机确认**（链路/结构已验，跳动本身待下一
   交易日 09:15 后复查）；轮询非推送（3s），真 tick 需 QMT/通达信官方 SDK；历史逐笔无法回看。
+
+2026-11-05 · **成熟化收口轮**：「能接入和引用的全部弄好，不要留一堆空缺，使其成熟化」+
+「使用时不要卡，检查好UI」。本轮不新增功能面，专修**接线与自欺**。
+
+- **回测从"跑完就没"变成可回看**：前端补「取消这次运行」（`cancelBacktest`，取消后仍保留已完成
+  明细、指标按设计留空）+ 终态补 `cancelling/cancelled/interrupted`，轮询不会把取消中的运行当
+  未结束无限刷；明细卡显示状态徽标、`bars`、`partial` 提示与 `detail_source`（`none` 时明说
+  "没有明细可回看"，不再给一块空白）。后端保留：明细分块落 `backtest_detail`、先落库后广播。
+- **两处"看起来一切正常"的假象**（第 18/19 处）：
+  ① **空跑**——策略 `params.symbol` 不在本次标的内时 0 成交，界面看起来像"策略没信号"；
+  现在 run 结束直接插一条明文说明（哪个标的、本次有哪些标的、怎么改），并写进 `remark`。
+  ② **对账心跳冒充差异**——每轮"无差异"审计记录混进待处置列表，处置按钮无从下手；
+  现在 `diffs_only` 默认 True（`open_diffs` 与 `recent_diffs` 两条分支都要认这个参数），
+  无差异记录只在勾选「含每轮无差异记录」时出现，且不给认领控件。
+- **保留期接线**（此前 `log_retention_days` 文档有、无调用者）：设置页可改，每日 18:40
+  `retention_purge` 只清 `run_log` 与 `kind='clean'` 的对账心跳，差异与回测明细不动。
+- **测试隔离根治**：新增根级 `tests/conftest.py`——会话级换 `QUANTDESK_DATA_DIR` 并重建默认库，
+  函数级清 settings 缓存与引擎；另加一条看门狗用例，断言默认库路径永不指向工作区。
+  此前全量跑把 181 行测试数据写进真实库（已先 `.backup` 备份再精确清理）。
+- **手册与设置同步锁**：`test_every_editable_setting_is_explained_in_manual` 要求每个可编辑
+  设置键都在使用手册里出现（本轮 7 个只写中文名的补齐为键名）；手册补回测状态/取消/明细、
+  监控红条处置、通道差异认领与保留期口径。
+- 验收：pytest **776 passed**；13 条路由在 1440/980/860 三档宽度无横向溢出；
+  本机读取接口 <400ms（冷启动盯盘详情 1.3s 一次后 2.7ms）。
+- 提交：`D31-01`（详见进度日志同名小节）。

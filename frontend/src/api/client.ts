@@ -5,17 +5,43 @@ import axios from 'axios'
 export const api = axios.create({ baseURL: '/api', timeout: 5000 })
 
 /**
+ * FastAPI 自己生成的英文兜底文案（不是后端作者写的 detail）。
+ * 只认这几个精确串：服务端作者给的中文 detail 一律原样回显，不做改写。
+ */
+const BOILERPLATE_CN: Record<string, string> = {
+  'Not Found': '接口不存在（后端还没有这个接口或路径写错）',
+  'Method Not Allowed': '请求方式不被该接口接受',
+  'Internal Server Error': '后端处理出错（详情见后端日志）',
+  'Bad Gateway': '网关无响应',
+  'Service Unavailable': '后端服务未就绪',
+  'Unauthorized': '未授权',
+  'Forbidden': '没有权限',
+}
+
+/**
  * 统一取服务端错误原文：后端把可读原因放在 HTTPException 的 detail 里
  * （如「修改 simulation_only 到危险值需输入确认文本…」），前端必须原样回显，
  * 不做任何二次判定（宪法第 2 条：安全判定在服务端）。
+ *
+ * 没有 detail 时不再回落 axios 英文原文（"Network Error" 这类对个人投资者
+ * 等于没说）：连接层失败一律归因到「后端没起来 / 超时」，HTTP 状态码单独表述。
  */
 export function apiError(e: unknown): string {
   if (axios.isAxiosError(e)) {
+    const status = e.response?.status
     const detail = (e.response?.data as { detail?: unknown } | undefined)?.detail
-    if (typeof detail === 'string' && detail) return detail
+    const mapped = (s: string): string =>
+      BOILERPLATE_CN[s] ? `${BOILERPLATE_CN[s]}（HTTP ${status ?? '—'}）` : s
+    if (typeof detail === 'string' && detail) return mapped(detail)
     if (detail !== undefined && detail !== null) return JSON.stringify(detail)
-    if (typeof e.response?.data === 'string' && e.response.data) return e.response.data
-    return e.message
+    if (typeof e.response?.data === 'string' && e.response.data) return mapped(e.response.data)
+    if (!e.response) {
+      // 请求没拿到响应：后端未启动、端口不通、或被超时掐断
+      if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || /timeout/i.test(e.message))
+        return '连不上后端（请求超时）——请确认后端已启动，或点右上角重试'
+      return '连不上后端（请确认后端已启动，或点右上角重试）'
+    }
+    return `请求失败（HTTP ${status}）——后端未给出原因`
   }
   return e instanceof Error ? e.message : String(e)
 }
@@ -166,12 +192,19 @@ export interface BacktestSubmitAck {
 /** GET /api/backtest/{id}/progress 与 WS backtest_progress 事件的共同结构。 */
 export interface BacktestProgress {
   run_id?: number
-  status: string        // queued / running / completed / failed / unknown
+  /**
+   * queued / running / completed / failed / cancelled / interrupted
+   * + cancelling（取消已受理，引擎还没停在 bar 边界，前端继续轮询）
+   * + unknown（本进程与库里都查不到）。
+   */
+  status: string
   done?: number
   total?: number
   percent?: number
   error?: string
   message?: string
+  /** 状态取自库里的终态而非本进程内存（服务重启后回看历史运行）。 */
+  source?: string
 }
 
 export async function submitBacktest(req: BacktestRequest): Promise<BacktestSubmitAck> {
@@ -204,7 +237,7 @@ export async function listBacktestRuns(limit = 50): Promise<BacktestRunRow[]> {
   return r.data
 }
 
-/** 单条运行详情：完成后才带 metrics/equity，成交明细仅在进程内缓存命中时存在。 */
+/** 单条运行详情：状态/指标/净值来自库，成交明细优先本进程缓存、否则回读 backtest_detail。 */
 export interface BacktestRunDetail {
   run_id: number
   strategy: string
@@ -225,10 +258,31 @@ export interface BacktestRunDetail {
   logs?: string[]
   bars?: number
   config?: Record<string, unknown>
+  /** 取消/中断的运行：明细是截至停止点的部分结果，指标一律为空。 */
+  partial?: boolean
+  /** 日志截断前的总条数（logs 只留最后 200 条）。 */
+  logs_total?: number
+  /** memory=本进程缓存 / db=已落库可回看 / none=这次没有明细。 */
+  detail_source?: string
 }
 
 export async function getBacktestRun(runId: number): Promise<BacktestRunDetail> {
   const r = await api.get<BacktestRunDetail>(`/backtest/${runId}`)
+  return r.data
+}
+
+/** POST /api/backtest/{id}/cancel —— 语义在 body 里，终态运行幂等返回 changed=false。 */
+export interface BacktestCancelAck {
+  run_id: number
+  ok: boolean
+  changed: boolean
+  status: string
+  cancelling?: boolean
+  message: string
+}
+
+export async function cancelBacktest(runId: number): Promise<BacktestCancelAck> {
+  const r = await api.post<BacktestCancelAck>(`/backtest/${runId}/cancel`, {})
   return r.data
 }
 
@@ -304,19 +358,53 @@ export async function getFreqs(symbol: string): Promise<string[]> {
 
 export interface TickSnapshot {
   symbol: string
-  dt: string
-  last: number
-  open: number
-  high: number
-  low: number
-  volume: number
-  amount: number
+  dt: string | null
+  last: number | null
+  open: number | null
+  high: number | null
+  low: number | null
+  volume: number | null
+  amount: number | null
   bids: [number, number][]
   asks: [number, number][]
+  /** 这份盘口来自哪：realtime_pump（订阅推送）/ tx_quote（只读公开源补齐）/ none */
+  source?: string
+  /** source=none 时后端给的原因原文——界面要能说清"为什么没有"，不许只留空白 */
+  reason?: string
 }
 
 export async function getSnapshot(symbol: string): Promise<TickSnapshot | null> {
   const r = await api.get<TickSnapshot | null>('/market/snapshot', { params: { symbol } })
+  return r.data
+}
+
+/** 财务（GET /api/market/financial）：摘要=东财比率，三表=新浪逐科目；后端已转成分组结构。 */
+export interface FinancialDoc {
+  symbol: string
+  report_type: 'indicator' | 'income' | 'balance' | 'cashflow'
+  periods: string[]
+  groups: { name: string; items: { indicator: string; values: Record<string, number | null> }[] }[]
+  source: string
+  cached: boolean
+  rows: number
+  note: string
+}
+
+export type FinReportType = FinancialDoc['report_type']
+
+export const FIN_TYPE_LABELS: Record<FinReportType, string> = {
+  indicator: '财务摘要',
+  income: '利润表',
+  balance: '资产负债表',
+  cashflow: '现金流量表',
+}
+
+/** 首次是真实外呼（3~10 秒），后端缓存 5 分钟；超时给足，别让界面报"连不上后端"。 */
+export async function getFinancial(symbol: string, reportType: FinReportType): Promise<FinancialDoc> {
+  const r = await api.get<FinancialDoc>('/market/financial', {
+    params: { symbol, report_type: reportType },
+    timeout: 40000,
+  })
   return r.data
 }
 
@@ -355,6 +443,8 @@ export interface AppSettings {
   watchdog_interval_s: number
   reconcile_interval_s: number
   backtest_async: boolean
+  /** 运行噪音保留期（天）：只作用于运行日志与对账无差异心跳，业务数据永不自动删。 */
+  log_retention_days: number
   // 软件互操作目录
   tdx_install_dir: string
   ths_install_dir: string
@@ -495,6 +585,8 @@ export interface ReconcileStatus {
   running: boolean
   ran_at?: number
   diffs?: number
+  /** 还没处置的差异条数（红条按这个数报警，处置完就该安静） */
+  open?: number
   by_kind?: Record<string, number>
   skipped?: string
   kinds?: Record<string, string>
@@ -507,6 +599,9 @@ export interface ReconcileDiff {
   kind: string
   ref: string
   detail: Record<string, unknown>
+  resolved: boolean
+  resolve_note: string
+  resolved_at: number
 }
 
 export interface ChannelsOverview {
@@ -563,8 +658,28 @@ export interface ReconcileState {
   diffs: ReconcileDiff[]
 }
 
-export async function getReconcile(limit = 100): Promise<ReconcileState> {
-  const r = await api.get<ReconcileState>('/channels/reconcile', { params: { limit } })
+/**
+ * 对账差异。diffsOnly 默认 true：每轮无差异也会落一条 kind='clean' 的审计行，
+ * 它不是差异，混进列表会让「待处置」按 30s 心跳增长（一天 2880 条）而看不见真事故。
+ */
+export async function getReconcile(
+  limit = 100,
+  unresolvedOnly = false,
+  diffsOnly = true,
+): Promise<ReconcileState> {
+  const r = await api.get<ReconcileState>('/channels/reconcile', {
+    params: { limit, unresolved_only: unresolvedOnly, diffs_only: diffsOnly },
+  })
+  return r.data
+}
+
+/** 差异处置：标"已核实"并留一句话结论；resolve=false 退回未处置。 */
+export async function resolveReconcileDiff(
+  id: number,
+  note = '',
+  resolve = true,
+): Promise<ReconcileDiff> {
+  const r = await api.post<ReconcileDiff>(`/channels/reconcile/${id}/resolve`, { note, resolve })
   return r.data
 }
 
@@ -973,8 +1088,12 @@ export async function removeWatchPool(symbol: string): Promise<{ removed: boolea
   return r.data
 }
 
-export async function getWatchDetail(symbol: string): Promise<WatchDetail> {
-  const r = await api.get<WatchDetail>(`/watch/${encodeURIComponent(symbol)}`, { timeout: 60000 })
+export async function getWatchDetail(symbol: string, force = false): Promise<WatchDetail> {
+  // force=true 只有用户点「立即刷新」时才传：休市闸靠它区分"自动轮询"和"我真的要看最新"
+  const r = await api.get<WatchDetail>(`/watch/${encodeURIComponent(symbol)}`, {
+    params: force ? { force: true } : undefined,
+    timeout: 60000,
+  })
   return r.data
 }
 
@@ -1030,4 +1149,127 @@ export async function getGuideTerms(q: { category?: string; q?: string } = {}): 
 export async function getGuideTerm(slug: string): Promise<GuideTerm> {
   const r = await api.get<GuideTerm>(`/guide/terms/${encodeURIComponent(slug)}`)
   return r.data
+}
+
+// ---------------- 历史数据下载任务（数据管理页）----------------
+
+export interface DataDownloadRequest {
+  symbols: string[]
+  freq?: string
+  start?: string
+  end?: string
+  adjust?: string
+}
+
+/** 任务状态：queued → running → done / error。前端 1s 轮询直到终态。 */
+export interface DataTask {
+  state: 'queued' | 'running' | 'done' | 'error'
+  done: number
+  total: number
+  current: string
+  /** 成功标的 → 写入行数 */
+  ok: Record<string, number>
+  /** 失败标的 → 后端给的中文原因（限流/口径/依赖缺失），前端逐条上屏不吞 */
+  failed: Record<string, string>
+  error?: string
+}
+
+export async function startDataDownload(
+  body: DataDownloadRequest,
+): Promise<{ task_id: string }> {
+  const r = await api.post<{ task_id: string }>('/data/download', body, { timeout: 30000 })
+  return r.data
+}
+
+export async function getDataTask(taskId: string): Promise<DataTask> {
+  const r = await api.get<DataTask>(`/data/task/${encodeURIComponent(taskId)}`, { timeout: 20000 })
+  return r.data
+}
+
+/** 本地库清单：这台机器攒了哪些 标的×周期×复权、覆盖到哪年、成交额是不是缺失。 */
+export interface InventoryRow {
+  market: string
+  symbol: string
+  freq: string
+  adjust: string
+  rows: number
+  files: number
+  bad_files: number
+  start: string
+  end: string
+  amount_zero_pct: number
+}
+
+export interface Inventory {
+  root: string
+  items: InventoryRow[]
+  symbols: number
+  entries: number
+  rows: number
+  bad_files: number
+  rows_by_freq: Record<string, number>
+}
+
+export async function getDataInventory(): Promise<Inventory> {
+  const r = await api.get<Inventory>('/data/inventory', { timeout: 30000 })
+  return r.data
+}
+
+// ---------------- 应用内使用手册 ----------------
+
+/** GET /api/manual/sections 的一行：目录条目（group 是左侧分组的依据）。 */
+export interface ManualSection {
+  slug: string
+  title: string
+  route: string
+  nav: string
+  summary: string
+  group: string
+}
+
+/** GET /api/manual/{slug} 的正文：每块都是「读完能自己做」的颗粒度。 */
+export interface ManualDoc {
+  slug: string
+  title: string
+  route: string
+  nav: string
+  intro: string
+  /** 内容可信度标记，如「已实测」/「部分待实测」——界面原样显示，不做美化 */
+  status: string
+  prerequisites: { what: string; why: string; where: string; ready: string }[]
+  steps: { do: string; expect: string }[]
+  readouts: { field: string; meaning: string }[]
+  gotchas: { myth: string; truth: string }[]
+  errors: { text: string; meaning: string; fix: string }[]
+  faq: { q: string; a: string }[]
+  links: { label: string; to: string }[]
+}
+
+/** GET /api/manual/search 的一条命中：field 是命中的分区名，snippet 是上下文。 */
+export interface ManualHit {
+  slug: string
+  title: string
+  field: string
+  snippet: string
+}
+
+export async function getManualSections(): Promise<ManualSection[]> {
+  const r = await api.get<ManualSection[]>('/manual/sections')
+  return r.data
+}
+
+export async function getManualDoc(slug: string): Promise<ManualDoc> {
+  const r = await api.get<ManualDoc>(`/manual/${encodeURIComponent(slug)}`)
+  return r.data
+}
+
+export async function searchManual(q: string): Promise<{ q: string; hits: ManualHit[] }> {
+  // 契约给的是 { q, hits }，但服务层 search() 直接返回数组——两种都接下来归一，
+  // 免得路由写法一变，搜索就静默显示「没有命中」（口径漂移比报错更难查）。
+  const r = await api.get<{ q: string; hits: ManualHit[] } | ManualHit[]>(
+    '/manual/search', { params: { q }, timeout: 20000 },
+  )
+  const d = r.data
+  const hits = Array.isArray(d) ? d : Array.isArray(d?.hits) ? d.hits : []
+  return { q, hits }
 }

@@ -28,11 +28,33 @@ def list_files() -> list[str]:
 
 
 @router.get("/file")
-def read_file(path: str) -> dict:
+def read_file(path: str = "", module: str = "") -> dict:
+    """读策略源码。两种写法都收：path=相对 strategies/ 的路径，
+    module=回测页那种点分模块名（examples.dual_ma）——同一个文件不该要求调用方两套标识。
+    报错只说清"哪个名字没找到"，不把本机绝对路径带进响应。
+    """
+    target = (path or "").strip() or _module_to_path(module)
+    if not target:
+        raise HTTPException(status_code=400, detail="path 或 module 至少给一个")
     try:
-        return {"path": path, "code": get_strategy_manager().read_file(path)}
-    except (ValueError, FileNotFoundError) as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        return {"path": target, "code": get_strategy_manager().read_file(target)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404,
+                            detail=f"策略文件不存在: {target}（在「策略工作台」左侧列表里点选，或先新建）") from None
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=404, detail=f"读取失败: {e}") from e
+
+
+def _module_to_path(module: str) -> str:
+    """examples.dual_ma → examples/dual_ma.py（空串原样返回）。"""
+    text = (module or "").strip()
+    if not text:
+        return ""
+    parts = [p for p in text.replace("/", ".").split(".") if p]
+    if not parts:
+        return ""
+    file = parts[-1] if parts[-1].endswith(".py") else f"{parts[-1]}.py"
+    return "/".join([*parts[:-1], file])
 
 
 @router.post("/file")

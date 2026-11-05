@@ -1,12 +1,13 @@
 """SQLite 表模型（宪法存储层）。
 
 七张业务表：strategies / orders / trades / positions_snapshot / watchlist /
-compliance / backtest_runs；另含 schema_version 与 trading_days（D02 日历共用）。
+compliance / backtest_runs；另含 schema_version 与 trading_days（D02 日历共用）、
+account_state / reconcile_diff / run_log / daily_flow / backtest_detail（回测明细分块）。
 时间戳统一 INTEGER 毫秒（UTC）；orders.status 直接存 OrderStatus 枚举值
 （含 pending_confirm / expired_confirm，为 D17 二次确认铺路）。
 """
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Index, SQLModel
 
 from quantdesk.core.timeutil import now_ms
 
@@ -99,6 +100,15 @@ class ComplianceRow(SQLModel, table=True):
 
 
 class BacktestRunRow(SQLModel, table=True):
+    """回测运行记录。
+
+    status 取值（六个，前四个是既有语义，后两个本轮新增，不改写旧值含义）：
+    queued 排队中 / running 运行中 / completed 跑完并出指标 / failed 异常终止
+    / cancelled 用户取消（排队中直接作废，运行中在 bar 边界安全停下）
+    / interrupted 服务重启时发现库里仍挂着 queued|running——进程已经不在了，
+    这条运行事实上没跑完，如实标 interrupted 而不是让它永远挂着（明细多半不可回看）。
+    """
+
     __tablename__ = "backtest_runs"
 
     id: int | None = Field(default=None, primary_key=True)
@@ -114,6 +124,38 @@ class BacktestRunRow(SQLModel, table=True):
     remark: str = ""
     created_at: int = Field(default_factory=now_ms)
     finished_at: int | None = None
+
+
+class BacktestDetailRow(SQLModel, table=True):
+    """回测运行明细（成交/委托/日志/元信息）分块落库。
+
+    为什么要单独一张表，而不是往 backtest_runs 塞一个大 JSON 列：
+    - 体积：分钟线/多标的回测一次可产生上万笔成交与委托，整块 JSON 能到几 MB。
+      backtest_runs 是「清单页每行都要读」的表，把大对象挂在它身上，
+      列表接口会把明细一起读进内存（SQLite 不做列裁剪意义上的懒取）；
+    - 分块：按 (run_id, kind, seq) 切块，每块最多 _DETAIL_CHUNK_ROWS 条，
+      详情页按 kind 只取自己要的那几块，删运行记录时按 run_id 整体删；
+    - 生命周期不同：runs 行是「运行事实」，明细是「可重算的派生物」，
+      同一 run 重跑就是覆盖（先删同 kind 旧块再写），不与 runs 的语义纠缠。
+
+    kind 取值：trades / orders / logs（列表，按 seq 升序拼接）
+             meta（单块，dict：bars/config/partial/logs_total/counts）。
+    唯一索引 (run_id, kind, seq)：写入路径是「先删旧块再插」，
+    万一并发重跑同一 run，索引层就是最后一道防线（会抛约束冲突而不是静默双份）。
+    """
+
+    __tablename__ = "backtest_detail"
+    __table_args__ = (
+        Index("ux_backtest_detail_run_kind_seq", "run_id", "kind", "seq", unique=True),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    run_id: int = Field(index=True)
+    kind: str = Field(index=True, default="trades")
+    seq: int = 0
+    rows: int = 0                       # 本块条目数（logs/meta 为逻辑条数）
+    payload_json: str = "[]"
+    created_at: int = Field(default_factory=now_ms)
 
 
 class TradingDayRow(SQLModel, table=True):
@@ -154,6 +196,11 @@ class ReconcileDiffRow(SQLModel, table=True):
     ref: str = ""
     detail_json: str = "{}"
     created_at: int = Field(default_factory=now_ms)
+    # 处置闭环：差异不是列出来就完了，要能标"已核实/已处置"并留一句话原因。
+    # 这三列由 store.db.ensure_columns() 在老库上自动补齐（升级不许让软件打不开）。
+    resolved: bool = False
+    resolve_note: str = ""
+    resolved_at: int = 0
 
 
 class LogRow(SQLModel, table=True):

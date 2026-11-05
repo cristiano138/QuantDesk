@@ -695,3 +695,62 @@ def test_partial_cache_still_seeds_the_rest_of_the_pool(db, monkeypatch):
     hold = svc.refresh_auto()
     assert hold["polled"] is False and tx.calls == tried, "冷却期内不该再撞"
     assert "不重复补取" in hold["reason"]
+
+
+# ---------------- 详情与行情面板的取数闸门 ----------------
+
+def test_detail_endpoint_forwards_force_to_service_layer(db, monkeypatch):
+    """`?force=1` 必须一路传到服务层。
+
+    本轮真实踩过这条断链：接口签名收了 force 却没往下传，界面上的「立即刷新」在休市时
+    拿到的还是旧缓存——按钮点了没反应，比报错更难查（用户以为行情就是这个数）。
+    """
+    from quantdesk.app import app
+
+    monkeypatch.setattr(watch_mod, "_service", None)
+    tx = FakeTx({"600000.SH": _row("600000.SH")})
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=None)
+    monkeypatch.setattr(watch_mod, "_service", svc)
+    seen: list[bool] = []
+    real_detail = WatchService.detail
+
+    def spy(symbol, force=False):
+        seen.append(force)
+        return real_detail(svc, symbol, force=force)
+
+    monkeypatch.setattr(svc, "detail", spy)
+    with TestClient(app) as client:
+        assert client.get("/api/watch/600000.SH").status_code == 200
+        assert client.get("/api/watch/600000.SH", params={"force": "true"}).status_code == 200
+    assert seen == [False, True]
+
+
+def test_market_snapshot_falls_back_to_watch_cache_without_outbound_call(db, monkeypatch):
+    """行情面板的五档落到只读源：休市只读缓存，开盘才补取一次（宪法第 11 条③）。"""
+    from quantdesk.services.market_data import MarketDataService
+    from quantdesk.store.parquet_store import ParquetStore
+
+    monkeypatch.setattr(watch_mod, "_service", None)
+    tx = FakeTx({"600000.SH": _row("600000.SH")})
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=None)
+    monkeypatch.setattr(watch_mod, "_service", svc)
+    _closed_clock(monkeypatch)
+
+    msvc = MarketDataService(store=ParquetStore(root=db.parent / "p"), bus=None)
+    empty = msvc.snapshot_or_readonly("600000.SH")
+    assert empty["last"] is None and empty["reason"]
+    assert tx.calls == 0, "休市的自动路径一次接口都不许打"
+
+    svc.refresh(["600000.SH"])                        # 今天开盘时取到的那行还在缓存里
+    body = msvc.snapshot_or_readonly("600000.SH")
+    assert body["last"] == 10.0 and body["source"] == "tx_quote"
+    assert body["bids"] and body["asks"]
+    assert tx.calls == 1, "有缓存就不该再外呼"
+
+
+def test_watch_service_cached_row_never_calls_feed(db, monkeypatch):
+    monkeypatch.setattr(watch_mod, "_service", None)
+    tx = FakeTx({"600000.SH": _row("600000.SH")})
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=None)
+    assert svc.cached_row("600000.SH") == {}
+    assert tx.calls == 0

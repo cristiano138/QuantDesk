@@ -105,7 +105,7 @@ def detail(symbol: str, force: bool = False) -> dict:
     except QuantDeskError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     try:
-        return _svc().detail(symbol)
+        return _svc().detail(symbol, force=force)
     except QuantDeskError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
 

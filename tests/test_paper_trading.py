@@ -17,8 +17,12 @@ from quantdesk.store.repo import account_get, latest_positions
 SYM = "600000.SH"
 
 
-def mk_tick(last=10.0, bids=None, asks=None, dt=datetime(2026, 11, 4, 9, 31)) -> Tick:
-    return Tick(symbol=SYM, dt=dt, last=last, open=last, high=last, low=last,
+def mk_tick(last=10.0, bids=None, asks=None, dt=None) -> Tick:
+    # 成交时间戳取自 tick：写死日期会在跨零点后让「当日买入 available=0」这条断言变假红，
+    # 所以默认用"今天 09:31"——测试要测的是 T+1 语义，不是某一天
+    return Tick(symbol=SYM, dt=dt or datetime.now().replace(hour=9, minute=31, second=0,
+                                                            microsecond=0),
+                last=last, open=last, high=last, low=last,
                 volume=10_000, amount=last * 10_000,
                 bids=bids or [(round(last - 0.02, 2), 500)],
                 asks=asks or [(round(last + 0.02, 2), 500)])

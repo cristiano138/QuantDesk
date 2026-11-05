@@ -85,13 +85,17 @@ def test_api_market_endpoints(store, tmp_path, monkeypatch):
     init_db(tmp_path / "w.db")
     monkeypatch.setattr(mod, "_service",
                         MarketDataService(store=store, bus=None, db_path=tmp_path / "w.db"))
+    monkeypatch.setattr("quantdesk.services.watch.WatchService.session_live", lambda self: False)
     with TestClient(app) as client:
         r = client.get("/api/market/history", params={"symbol": SYM, "freq": "1d"})
         assert r.status_code == 200
         rows = r.json()
         assert len(rows) == 60 and rows[0]["dt"].startswith("2020-01")
         assert client.get("/api/market/freqs", params={"symbol": SYM}).json() == ["1d"]
-        assert client.get("/api/market/snapshot", params={"symbol": SYM}).json() in ({}, None)
+        # 没选标的也要拿得到周期枚举（首屏据此渲染切换按钮）
+        assert "1d" in client.get("/api/market/freqs").json()
+        snap = client.get("/api/market/snapshot", params={"symbol": SYM}).json()
+        assert snap is None or (snap["last"] is None and snap["reason"])   # 不编造价格，且说清原因
         # 自选股
         client.post("/api/market/watchlist", json={"symbol": "000001.SZ", "name": "平安银行"})
         assert client.get("/api/market/watchlist").json()[0]["symbol"] == "000001.SZ"

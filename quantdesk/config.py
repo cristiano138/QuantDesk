@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     # —— 回测任务队列（异步化：POST 立即返回 run_id，进度经 WS）——
     backtest_async: bool = True
 
+    # —— 本地留存（运行日志与对账心跳的保留期；用户的回测/委托/成交永不自动删）——
+    # 对账每 30s 一轮、无差异也落一条审计行，run_log 逐条落库：不清理就是每天几千行，
+    # 一年后库里有四十万条没人会看的噪音。保留期只作用于这两类"运行噪音"。
+    log_retention_days: int = 90
+
 
 @lru_cache
 def get_settings() -> Settings:

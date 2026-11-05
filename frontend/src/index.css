@@ -120,6 +120,8 @@ section h2 {
   border-radius: 8px;
   padding: 14px 16px;
   margin-bottom: 16px;
+  /* 窗口拉窄（或桌面壳半屏）时，宽表格在卡片内部横向滚，而不是把整个页面撑出横向滚动条 */
+  overflow-x: auto;
 }
 
 .backtest-form label {
@@ -827,4 +829,151 @@ tr.row-active > td {
 .alert-banner .sub-note {
   color: #9b2c2c;
   margin-left: 6px;
+}
+
+/* 财务三表：80 项指标 × 最近 8 期，纵向滚动 + 指标列固定，读表不用横向拖来拖去 */
+.fin-wrap {
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid #eef1f5;
+  border-radius: 8px;
+}
+
+.fin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.fin-table th,
+.fin-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f1f3f6;
+  white-space: nowrap;
+}
+
+.fin-table thead th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 2;
+  color: #6b7280;
+  font-weight: 500;
+  text-align: right;
+}
+
+.fin-table thead th:first-child {
+  text-align: left;
+}
+
+.fin-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-table td:first-child,
+.fin-table th:first-child {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+  text-align: left;
+}
+
+.fin-table tr.fin-group td {
+  background: #f6f8fb;
+  color: #334155;
+  font-weight: 600;
+}
+
+/* 页签样式的水路链（和 freq-tabs 按钮同尺寸，避免"链接"在工具条里看起来是另一类东西） */
+.freq-tab-link {
+  display: inline-block;
+  padding: 4px 10px;
+  margin-left: 4px;
+  border: 1px solid #d3d7de;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #374151;
+  background: #fff;
+}
+
+.freq-tab-link:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+/* ---------- 窄窗口不许撑成横向大图 ----------
+   grid 子项默认 min-width:auto：一张宽表格会把 1fr 轨道顶破容器，整页开始横向滚动。
+   桌面壳可以拖窄、半屏并排也常见，所以统一 minmax(0,1fr)，窄屏折成一列。 */
+section {
+  min-width: 0;
+}
+
+.backtest-layout {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.strategy-layout {
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
+}
+
+.market-layout {
+  grid-template-columns: 180px minmax(0, 1fr) 260px;
+}
+
+.metric-cards,
+.monitor-cards {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.form-grid,
+.backtest-form .row2 {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+@media (max-width: 1180px) {
+  .strategy-layout,
+  .market-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .backtest-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  aside {
+    width: 150px;
+  }
+}
+
+/* 手册与指引页的三栏/两栏：以前内联写死 minmax(420px|320px)，窗口一窄整页就横向滚。
+   改成轨道可压到 0，窄屏折成一列（正文比目录更重要，折行后目录在上）。 */
+.manual-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .guide-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .manual-layout,
+  .guide-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

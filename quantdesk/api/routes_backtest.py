@@ -1,10 +1,15 @@
-"""回测 API（D08 → 异步队列化）：
+"""回测 API（D08 → 异步队列化 + 明细落库可回看 + 可取消）：
 
 POST /api/backtest              运行回测（async_run 默认取 settings.backtest_async）
 POST /api/backtest/async        强制入队，立即返回 run_id
-GET  /api/backtest/{id}         查询运行（含 status/progress，前端轮询用）
+GET  /api/backtest/{id}         查询运行（含 status/progress 与明细，前端轮询用）
+GET  /api/backtest/{id}/progress 进度（内存优先，本进程没有则直读库里的真实终态）
+POST /api/backtest/{id}/cancel  取消运行（排队中直接作废 / 运行中在 bar 边界安全停下）
 GET  /api/backtest              最近运行清单
 GET  /api/backtest/strategies   可用策略清单（含参数表）
+
+明细（成交/委托/日志/元信息）落在 backtest_detail 表，服务重启后同构可回看；
+状态取值 queued / running / completed / failed / cancelled / interrupted。
 """
 
 from fastapi import APIRouter, HTTPException
@@ -63,6 +68,7 @@ def run_backtest(req: BacktestRequest) -> dict:
             return {"run_id": run_id, "status": "queued", "async": True,
                     "metrics": {}, "equity": [], "trades": [], "orders": [],
                     "logs": [], "bars": 0, "config": {},
+                    "partial": False, "logs_total": 0, "detail_source": "none",
                     "progress": svc.progress(run_id)}
         return svc.run(**req.kwargs())
     except ValueError as e:
@@ -84,6 +90,29 @@ def run_backtest_async(req: BacktestRequest) -> dict:
 @router.get("/{run_id}/progress")
 def backtest_progress(run_id: int) -> dict:
     return get_backtest_service().progress(run_id)
+
+
+@router.post("/{run_id}/cancel")
+def cancel_backtest(run_id: int) -> dict:
+    """取消一次回测运行（排队中 → 直接 cancelled 不执行；运行中 → bar 边界安全停下）。
+
+    响应（HTTP 200，语义放在 body 里，便于前端对「已终态」做幂等处理而不是弹错误）：
+    {
+      "run_id": int,
+      "ok": bool,            # 取消请求是否被受理（终态运行为 false）
+      "changed": bool,       # 本次调用是否已把状态改写为终态
+      "status": str,         # 调用后的运行状态字样（queued→cancelled；running→仍 running
+                             #   并带 "cancelling": true，终态→原状态不变）
+      "cancelling"?: bool,   # 仅运行中：标志已置位，等引擎停在 bar 边界，需继续轮询
+      "message": str         # 中文说明，可直接展示
+    }
+    幂等：对 completed/failed/cancelled/interrupted 再调一次只回原状态，不改写历史。
+    库里查无此运行 → 404。
+    """
+    out = get_backtest_service().request_cancel(run_id)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"回测 {run_id} 不存在")
+    return out
 
 
 @router.get("/{run_id}")

@@ -12,9 +12,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 import {
   apiError,
+  cancelBacktest,
   getBacktestRun,
   getBacktestProgress,
   getStrategies,
+  getWatchStatus,
+  getWatchlist,
   listBacktestRuns,
   openEvents,
   submitBacktest,
@@ -25,6 +28,7 @@ import {
   type Metrics,
   type StrategyInfo,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 /** 参数表单值：全部以字符串编辑，提交时按默认值类型转换。 */
 type ParamValues = Record<string, string>
@@ -47,9 +51,15 @@ const METRIC_CARDS: { key: keyof Metrics; label: string; fmt: (v: number | null)
 const RUN_STATUS_CN: Record<string, string> = {
   queued: '排队中',
   running: '运行中',
+  cancelling: '取消中',
   completed: '完成',
   failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断',
 }
+
+/** 走到终点、不再轮询的状态。cancelling 不算——引擎还没停在 bar 边界。 */
+const TERMINAL = ['completed', 'failed', 'cancelled', 'interrupted']
 
 function pct(v: number | null): string {
   if (v == null) return '—'
@@ -132,10 +142,12 @@ function RunHistory({ onPick, activeId }: { onPick: (id: number) => void; active
 
   useEffect(() => {
     refresh()
-    // 异步回测完成后清单状态会变，收到 done 事件时刷一次
+    // 异步回测完成后清单状态会变，收到终态事件时刷一次（含取消：状态从 running 变 cancelled）
     return openEvents((data) => {
       const d = data as { type?: string; data?: { action?: string } }
-      if (d?.type === 'log' && (d.data?.action === 'backtest_done' || d.data?.action === 'backtest_progress')) {
+      const action = d.data?.action
+      if (d?.type === 'log' && (action === 'backtest_done' || action === 'backtest_progress'
+        || action === 'backtest_cancelled' || action === 'backtest_interrupted')) {
         refresh()
       }
     })
@@ -202,7 +214,37 @@ export default function BacktestPage() {
   const [slippage, setSlippage] = useState('0')
   const [params, setParams] = useState<ParamValues>({})
   const [error, setError] = useState('')
+  const [pickMsg, setPickMsg] = useState('')
   const [detail, setDetail] = useState<BacktestRunDetail | null>(null)
+
+  /** 把已选好的票一次性带进回测标的框：以前只能在三个页面之间手抄代码。 */
+  const pullSymbols = async (from: 'watchlist' | 'pool') => {
+    setPickMsg('')
+    setError('')
+    try {
+      const list =
+        from === 'watchlist'
+          ? (await getWatchlist()).map((w) => w.symbol)
+          : (await getWatchStatus()).pool ?? []
+      if (list.length === 0) {
+        setPickMsg(
+          from === 'watchlist'
+            ? '自选股是空的：先在行情面板加自选。'
+            : '盯盘池是空的：先在实时盯盘加标的（或点「从自选股导入」）。',
+        )
+        return
+      }
+      const merged: string[] = []
+      for (const s of [...symbol.split(/[,，\s]+/), ...list]) {
+        const t = s.trim().toUpperCase()
+        if (t && !merged.includes(t)) merged.push(t)
+      }
+      setSymbol(merged.join(','))
+      setPickMsg(`已带入 ${list.length} 只（去重后共 ${merged.length} 只）`)
+    } catch (e: unknown) {
+      setError(apiError(e))
+    }
+  }
 
   // 异步运行态：WS 事件与轮询谁先到用谁的进度
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -210,7 +252,9 @@ export default function BacktestPage() {
   const activeRef = useRef<number | null>(null)
   activeRef.current = activeId
 
-  const finished = prog?.status === 'completed' || prog?.status === 'failed'
+  const finished = !prog || TERMINAL.includes(prog.status)
+  const [cancelMsg, setCancelMsg] = useState('')
+  const [cancelling, setCancelling] = useState(false)
 
   useEffect(() => {
     getStrategies()
@@ -237,9 +281,10 @@ export default function BacktestPage() {
       .catch((e: unknown) => setError(apiError(e)))
   }, [])
 
-  // 完成后拉结果；进度事件与轮询都只更新进度，避免重复请求结果
+  // 完成后拉结果；取消的运行也要拉——明细是截至停止点的部分结果，用户有权看到它跑到哪
   useEffect(() => {
-    if (activeId != null && prog?.status === 'completed') loadResult(activeId)
+    if (activeId == null || !prog) return
+    if (prog.status === 'completed' || prog.status === 'cancelled') loadResult(activeId)
   }, [activeId, prog?.status, loadResult])
 
   // 进度轮询兜底（WS 断线时仍能推进），与 WS 事件互不冲突
@@ -284,6 +329,15 @@ export default function BacktestPage() {
           }))
         } else if (dd.action === 'backtest_done') {
           setProg({ run_id: runId, status: 'completed', percent: 100, message: dd.message })
+        } else if (dd.action === 'backtest_cancelled') {
+          setProg((cur) => ({
+            ...(cur ?? { run_id: runId }),
+            run_id: runId,
+            status: 'cancelled',
+            done: dd.done,
+            total: dd.total,
+            message: dd.message,
+          }))
         }
       }),
     [],
@@ -317,12 +371,33 @@ export default function BacktestPage() {
     }
   }
 
+  const cancel = async () => {
+    if (activeId == null) return
+    setCancelMsg('')
+    setError('')
+    setCancelling(true)
+    try {
+      const ack = await cancelBacktest(activeId)
+      setCancelMsg(ack.message)
+      if (ack.changed) {
+        // 排队中直接作废：后端已把状态写成终态，不必等轮询
+        setProg((cur) => ({ ...(cur ?? { run_id: activeId }), status: ack.status }))
+      } else if (ack.cancelling) {
+        setProg((cur) => ({ ...(cur ?? { run_id: activeId }), status: 'cancelling' }))
+      }
+    } catch (e: unknown) {
+      setError(apiError(e))
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const percent = prog ? percentOf(prog) : 0
   const runningNow = activeId != null && !finished
 
   return (
     <section>
-      <h2>回测报告</h2>
+      <h2>回测报告<HelpLink slug="backtest" /></h2>
       <div className="backtest-layout">
         <div className="card backtest-form">
           <h3>运行回测</h3>
@@ -340,6 +415,12 @@ export default function BacktestPage() {
           <label>
             标的（逗号分隔）
             <input value={symbol} onChange={(e) => setSymbol(e.target.value)} />
+            <span className="freq-tabs" style={{ marginTop: 4 }}>
+              <button type="button" onClick={() => void pullSymbols('watchlist')}
+                      title="把行情面板的自选股带进来（去重，不清空已填的）">从自选带入</button>
+              <button type="button" onClick={() => void pullSymbols('pool')}
+                      title="把实时盯盘的标的池带进来（去重，不清空已填的）">从盯盘池带入</button>
+            </span>
           </label>
           <div className="row2">
             <label>
@@ -383,6 +464,7 @@ export default function BacktestPage() {
             可在「设置」中通过 backtest_async 改回同步。
           </p>
           {error && <p className="badge badge-down">{error}</p>}
+          {pickMsg && <p className="sub-note">{pickMsg}</p>}
         </div>
 
         <div className="backtest-output">
@@ -391,6 +473,12 @@ export default function BacktestPage() {
               <div className="row-btns">
                 <h3>运行进度 #{activeId}</h3>
                 <span className="badge">{RUN_STATUS_CN[prog.status] ?? prog.status}</span>
+                {!finished && (
+                  <button className="mini" disabled={cancelling} onClick={cancel}
+                          title="排队中的运行直接从队列摘掉；运行中的在当前 bar 边界安全停下（不做半截撮合）">
+                    {cancelling ? '取消中…' : '取消这次运行'}
+                  </button>
+                )}
               </div>
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
@@ -400,9 +488,21 @@ export default function BacktestPage() {
                 {percent.toFixed(1)}%
                 {prog.message ? ` · ${prog.message}` : ''}
               </p>
+              {cancelMsg && <p className="sub-note warn">{cancelMsg}</p>}
               {prog.status === 'failed' && (
                 <p className="badge badge-down">
                   状态 failed：{prog.error || '后端未返回错误详情，请查看运行记录备注'}
+                </p>
+              )}
+              {prog.status === 'cancelled' && (
+                <p className="sub-note">
+                  已取消：指标不予计算（半截成交算出来的收益不是「一次跑完的回测」），
+                  下面的净值与成交是截至停止点的部分结果。
+                </p>
+              )}
+              {prog.status === 'interrupted' && (
+                <p className="sub-note">
+                  已中断：这条运行由之前的服务进程发起，进程重启后执行体已不存在，如实标记而非永远挂着「运行中」。
                 </p>
               )}
             </div>
@@ -421,13 +521,25 @@ export default function BacktestPage() {
                 ))}
               </div>
               <div className="card">
-                <h3>
-                  净值曲线（run #{detail.run_id} · {detail.strategy} · {detail.symbol}）
-                </h3>
+                <div className="row-btns">
+                  <h3>
+                    净值曲线（run #{detail.run_id} · {detail.strategy} · {detail.symbol}
+                    {detail.bars ? ` · ${detail.bars} 根 bar` : ''}）
+                  </h3>
+                  <span className="badge">{RUN_STATUS_CN[detail.status] ?? detail.status}</span>
+                </div>
+                {detail.partial && (
+                  <p className="sub-note warn">
+                    部分结果：这次运行未跑完（{RUN_STATUS_CN[detail.status] ?? detail.status}），
+                    净值与成交只到停止那一刻，指标为空是刻意的——不许拿半截结果当一次完整回测的结论。
+                  </p>
+                )}
                 {detail.equity.length > 0 ? (
                   <EquityChart data={detail.equity} />
                 ) : (
-                  <p className="placeholder">无净值数据。</p>
+                  <p className="placeholder">
+                    无净值数据{detail.status === 'failed' ? '：这次运行异常终止，没有产出。' : '。'}
+                  </p>
                 )}
                 {detail.remark && <p className="sub-note warn">备注：{detail.remark}</p>}
               </div>
@@ -462,12 +574,22 @@ export default function BacktestPage() {
                   </table>
                 ) : (
                   <p className="placeholder">
-                    成交明细仅保留在进程内缓存中；服务重启后回看只有净值与指标。
+                    {detail.detail_source === 'none'
+                      ? '这次运行没有可回看的明细：它早于「明细落库」上线（改造前的运行只把成交放在进程内存里）。'
+                        + '新跑的回测成交/委托/日志都会分块落库，服务重启后照样能翻。'
+                      : detail.remark
+                        // 有备注就不在这儿猜原因：猜一次就多一套事实（空跑那次的真因写在备注里）
+                        ? '这次运行没有成交，原因见上方备注。'
+                        : '这次运行没有成交（策略未触发买卖，或取消得早）。'}
                   </p>
                 )}
                 {(detail.logs ?? []).length > 0 && (
                   <details>
-                    <summary>过程日志（{detail.logs?.length} 条）</summary>
+                    <summary>
+                      过程日志（显示 {detail.logs?.length} 条
+                      {detail.logs_total && detail.logs_total > (detail.logs?.length ?? 0)
+                        ? ` · 共 ${detail.logs_total} 条，只留最后 ${detail.logs?.length} 条` : ''}）
+                    </summary>
                     <pre className="logs">{detail.logs?.join('\n')}</pre>
                   </details>
                 )}

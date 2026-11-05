@@ -17,6 +17,7 @@ import {
   type SignalScanResult,
   type WatchItem,
 } from '../api/client'
+import HelpLink from '../components/HelpLink'
 
 /** 各规则 kinds 的参数字段（与后端 services/interop.py 的 normalize 对齐）。 */
 type FieldDef = { key: string; label: string; def: string; options?: string[] }
@@ -62,12 +63,14 @@ const DIALECT_CN: Record<string, string> = { tdx: '通达信', ths: '同花顺' 
 /** 标的来源选择：自选股勾选 + 手工粘贴，导出与信号扫描共用。 */
 function SymbolPicker({
   watch,
+  watchErr,
   picked,
   onPicked,
   manual,
   onManual,
 }: {
   watch: WatchItem[]
+  watchErr: string
   picked: string[]
   onPicked: (v: string[]) => void
   manual: string
@@ -80,7 +83,10 @@ function SymbolPicker({
       <label>
         自选股勾选（{picked.length}/{watch.length}）
         <div className="watch-pick">
-          {watch.length === 0 && <span className="placeholder">自选股为空，可在行情面板添加或直接手工粘贴。</span>}
+          {watchErr && <span className="sub-note warn">自选股读取失败：{watchErr}</span>}
+          {!watchErr && watch.length === 0 && (
+            <span className="placeholder">自选股为空，可在行情面板添加或直接手工粘贴。</span>
+          )}
           {watch.map((w) => (
             <label className="pick-item" key={w.symbol}>
               <input
@@ -105,7 +111,10 @@ function SymbolPicker({
 export default function InteropPage() {
   const [targets, setTargets] = useState<InteropTargets | null>(null)
   const [watch, setWatch] = useState<WatchItem[]>([])
+  const [watchErr, setWatchErr] = useState('')
   const [tdxDir, setTdxDir] = useState('')
+  // 目录读不到 ≠ 未配置：前者是后端连不上，后者是用户真没填，两句提示不能写成一句
+  const [tdxErr, setTdxErr] = useState('')
   const [pageErr, setPageErr] = useState('')
 
   // 导出
@@ -140,15 +149,34 @@ export default function InteropPage() {
   const [formulaErr, setFormulaErr] = useState('')
   const [copyMsg, setCopyMsg] = useState('')
 
+  const loadWatch = useCallback(() => {
+    getWatchlist()
+      .then((w) => {
+        setWatch(w)
+        setWatchErr('')
+      })
+      .catch((e: unknown) => setWatchErr(apiError(e)))
+  }, [])
+
+  const loadTdxDir = useCallback(() => {
+    getSettings()
+      .then((s) => {
+        setTdxDir(s.tdx_install_dir)
+        setTdxErr('')
+      })
+      .catch((e: unknown) => {
+        setTdxErr(apiError(e))
+        setTdxDir('')
+      })
+  }, [])
+
   useEffect(() => {
     getInteropTargets()
       .then(setTargets)
       .catch((e: unknown) => setPageErr(apiError(e)))
-    getWatchlist().then(setWatch).catch(() => setWatch([]))
-    getSettings()
-      .then((s) => setTdxDir(s.tdx_install_dir))
-      .catch(() => setTdxDir(''))
-  }, [])
+    loadWatch()
+    loadTdxDir()
+  }, [loadWatch, loadTdxDir])
 
   useEffect(() => {
     if (!targets || targets.rules.length === 0) return
@@ -167,9 +195,7 @@ export default function InteropPage() {
     return Array.from(new Set([...picked, ...pasted]))
   }, [picked, manual])
 
-  const refreshWatch = useCallback(() => {
-    getWatchlist().then(setWatch).catch(() => setWatch([]))
-  }, [])
+  const refreshWatch = useCallback(() => loadWatch(), [loadWatch])
 
   // 「导出为板块」复用导出区块：把命中标的填进手工粘贴区并滚动过去
   const sendHitsToExport = () => {
@@ -300,7 +326,7 @@ export default function InteropPage() {
   if (!targets) {
     return (
       <section>
-        <h2>软件互操作</h2>
+        <h2>软件互操作<HelpLink slug="interop" /></h2>
         <p className="placeholder">加载中…</p>
         {pageErr && <p className="badge badge-down">{pageErr}</p>}
       </section>
@@ -311,7 +337,7 @@ export default function InteropPage() {
 
   return (
     <section>
-      <h2>软件互操作</h2>
+      <h2>软件互操作<HelpLink slug="interop" /></h2>
       <p className="sub-note">导出目录：{targets.exports_dir}</p>
 
       <div className="card" ref={exportRef}>
@@ -320,7 +346,7 @@ export default function InteropPage() {
           板块名
           <input value={blkName} onChange={(e) => setBlkName(e.target.value)} placeholder="如 我的均线金叉" />
         </label>
-        <SymbolPicker watch={watch} picked={picked} onPicked={setPicked} manual={manual} onManual={setManual} />
+        <SymbolPicker watch={watch} watchErr={watchErr} picked={picked} onPicked={setPicked} manual={manual} onManual={setManual} />
         <div className="form-grid">
           <div>
             <span className="metric-label">目标软件（可多选）</span>
@@ -354,7 +380,16 @@ export default function InteropPage() {
               />
               <span>写入客户端目录（通达信 T0002\blocknew）</span>
             </label>
-            {!tdxDir && (
+            {!tdxDir && tdxErr && (
+              <p className="sub-note warn">
+                通达信安装目录读不到：{tdxErr}
+                <button className="mini" style={{ marginLeft: 6 }} onClick={loadTdxDir}>重试</button>
+                <br />
+                这不代表你没配置——配置很可能仍在设置页里，只是后端没连上取不回来。
+                连不上时也请先别改设置，避免覆盖掉原有目录。
+              </p>
+            )}
+            {!tdxDir && !tdxErr && (
               <p className="sub-note warn">
                 未填写通达信安装目录，无法直接写入客户端：请到「设置 → 软件目录」填 tdx_install_dir 后重试。
               </p>
@@ -489,7 +524,7 @@ export default function InteropPage() {
             </label>
           ))}
         </div>
-        <SymbolPicker watch={watch} picked={picked} onPicked={setPicked} manual={manual} onManual={setManual} />
+        <SymbolPicker watch={watch} watchErr={watchErr} picked={picked} onPicked={setPicked} manual={manual} onManual={setManual} />
         <div className="row-btns">
           <button disabled={scanning} onClick={doScan}>
             {scanning ? '扫描中…' : '扫描本地数据'}
