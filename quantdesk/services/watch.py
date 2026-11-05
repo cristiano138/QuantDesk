@@ -322,6 +322,18 @@ class WatchService:
             self._flow.pop(internal, None)
         return ok
 
+    # ---------- 选股搜索（给前端「选择添加」用，不靠手打代码） ----------
+    def search_symbols(self, query: str, limit: int = 20) -> dict:
+        """按名称/拼音首字母/代码搜股票。通道未就绪时如实报错，不假装搜到。"""
+        _, em = self._feeds()
+        if em is None or not hasattr(em, "search_symbols"):
+            return {"rows": [], "source": "", "error": "东方财富行情通道未就绪，选股搜索暂不可用"}
+        try:
+            rows = em.search_symbols(query, limit)
+        except QuantDeskError as e:
+            return {"rows": [], "source": "em_quote", "error": str(e)}
+        return {"rows": rows, "source": "em_quote", "error": ""}
+
     # ---------- 实时快照 ----------
     def _decorate_row(self, row: dict, em) -> dict:
         """给一行快照补上盯盘要的派生字段，并在腾讯不给内外盘时（港股）用东财官方值补齐。
@@ -406,10 +418,27 @@ class WatchService:
             self.stats["snapshots"] += len(rows)
             self.last_refresh_at = now
             self.last_error = ""
+        self._backfill_names(rows)
         if publish:
             self._publish("watch_update", {"count": len(rows),
                                            "symbols": [r["symbol"] for r in rows]})
         return rows
+
+    def _backfill_names(self, rows: list[dict]) -> None:
+        """把快照里拿到的名称回填进自选表——修「添加的股票只显示代号」：
+        加自选那一刻若通道不可用，名称会缺，等第一次刷到行情时补上（只在名称变化时写库）。"""
+        try:
+            fresh = {r.get("symbol", ""): (r.get("name") or "").strip()
+                     for r in rows if r.get("symbol")}
+            if not fresh:
+                return
+            known = {r.symbol: (r.name or "").strip()
+                     for r in repo.watchlist_list(db_path=self.db_path)}
+            for sym, nm in fresh.items():
+                if nm and known.get(sym, "") != nm:
+                    repo.watchlist_add(sym, name=nm, note="盯盘", db_path=self.db_path)
+        except Exception as e:  # noqa: BLE001 名称回填失败不影响行情
+            log.debug("名称回填失败: %s", e)
 
     def _stale_copy(self, syms: list[str]) -> list[dict]:
         """断线兜底：把缓存里的旧快照标成 stale 后返回（盯盘页要能看到"最后已知值"）。"""

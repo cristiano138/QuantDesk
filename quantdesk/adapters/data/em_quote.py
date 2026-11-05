@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -67,6 +68,8 @@ _KLT = {Frequency.D1: "101", Frequency.W1: "102", Frequency.MO1: "103",
         Frequency.M1: "1", Frequency.M5: "5", Frequency.M15: "15",
         Frequency.M30: "30", Frequency.H1: "60"}
 _FQT = {AdjustType.NONE: "0", AdjustType.FORWARD: "1", AdjustType.BACKWARD: "2"}
+# 港股名称尾部旗标组（-R 人民币柜台 / -WR WVR+人民币 / -S 第二上市…）里含 R 即柜台
+_HK_RMB_COUNTER_RE = re.compile(r"-[A-Z]{0,3}R$")
 
 
 class EastmoneyQuoteFeed(DataFeedAdapter):
@@ -247,6 +250,51 @@ class EastmoneyQuoteFeed(DataFeedAdapter):
         return Tick(symbol=q["symbol"], dt=pd.Timestamp(q["ts_ms"], unit="ms").to_pydatetime(),
                     last=q["last"], open=q["open"], high=q["high"], low=q["low"],
                     volume=q["volume"], amount=q["amount"], bids=[], asks=[])
+
+    # ---------- 选股搜索（suggest 接口，6h 缓存） ----------
+    _SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
+    _SEARCH_TTL = 6 * 3600.0
+    _search_cache: dict[str, tuple[float, list[dict]]] = {}
+
+    def search_symbols(self, query: str, limit: int = 20) -> list[dict]:
+        """按名称/拼音首字母/代码搜股票（选股器数据源）。
+
+        只返回股票（A股/B股/北交所/港股主板），指数、基金、美股、板块、
+        港股窝轮牛熊证一律排除；同一查询缓存 6 小时，走与行情相同的限速冷却。
+        """
+        q = str(query or "").strip()
+        if not q:
+            return []
+        limit = max(1, min(int(limit), 50))
+        key = q.lower()
+        now = time.monotonic()
+        hit = EastmoneyQuoteFeed._search_cache.get(key)
+        if hit and now - hit[0] < EastmoneyQuoteFeed._SEARCH_TTL:
+            return hit[1][:limit]
+        payload = self._json(EastmoneyQuoteFeed._SEARCH_URL,
+                             {"input": q, "type": "14", "count": 50, "invt": "2"},
+                             data_key=False)
+        items = ((payload or {}).get("QuotationCodeTable") or {}).get("Data") or []
+        rows: list[dict] = []
+        for it in items:
+            cls = str(it.get("Classify") or "")
+            if cls == "HK" and str(it.get("TypeUS")) != "3":
+                continue                     # 窝轮(6)/牛熊证(2)/期货——不是股票
+            if cls not in ("AStock", "BStock", "NEEQ", "HK"):
+                continue                     # 指数/基金/美股/板块
+            name = str(it.get("Name") or "").strip()
+            if cls == "HK" and _HK_RMB_COUNTER_RE.search(name):
+                continue                     # 人民币柜台（-R/-WR）＝同一家公司另一计价，别列两条
+            code, mkt = str(it.get("Code") or ""), str(it.get("MktNum") or "")
+            try:
+                sym = normalize(code.zfill(5) + ".HK") if mkt == "128" else normalize(code)
+            except AdapterError:
+                continue                     # 认不出的代码不硬给
+            if not rows or all(r["symbol"] != sym for r in rows):
+                rows.append({"symbol": sym, "name": name,
+                             "type": str(it.get("SecurityTypeName") or "")})
+        EastmoneyQuoteFeed._search_cache[key] = (now, rows)
+        return rows[:limit]
 
     # ---------- 逐笔成交（当日） ----------
     def get_transactions(self, symbol: str, count: int = 3000) -> pd.DataFrame:

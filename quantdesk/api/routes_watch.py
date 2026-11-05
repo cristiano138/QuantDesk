@@ -44,6 +44,14 @@ def status() -> dict:
     return _status_payload()
 
 
+@router.get("/symbols")
+def search_symbols(q: str, limit: int = 20) -> dict:
+    """按名称/拼音首字母/代码搜股票（选股器数据源；只读，不含任何交易语义）。"""
+    if not q.strip():
+        return {"rows": [], "source": "", "error": ""}
+    return _svc().search_symbols(q.strip(), limit)
+
+
 @router.get("/pool")
 def pool() -> dict:
     return {"pool": _svc().pool()}

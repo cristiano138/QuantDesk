@@ -100,6 +100,7 @@ def test_tx_snapshot_parses_units_and_levels():
 
     assert row["name"] == "浦发银行" and row["last"] == 10.13
     assert row["volume_unit"] == "lot" and row["volume"] == 824086.0
+    assert row["raw_volume_unit"] == "lot"               # 主板本来就是手，不许再除
     assert row["amount"] == pytest.approx(83449.05 * 10000)   # 归一成「元」
     assert row["outer_volume"] == 458432.0 and row["inner_volume"] == 365654.0
     assert row["limit_up"] == 11.11 and row["limit_down"] == 9.09
@@ -114,6 +115,29 @@ _HK_LEVELS = {9 + i * 2: f"{400 + i:.2f}" for i in range(5)} | \
              {10 + i * 2: str(1000 + i) for i in range(5)} | \
              {19 + i * 2: f"{401 + i:.2f}" for i in range(5)} | \
              {20 + i * 2: str(2000 + i) for i in range(5)}
+
+
+def test_tx_kechuang_volume_is_shares_and_gets_converted():
+    """科创板（688/689）腾讯给的是「股」，适配器必须换算成手。
+
+    实测依据：2026-11-05 跨源核对 122 只，主板/创业/北交的量与东财「手」逐位相等，
+    688/689 一律差 100 倍；用成交额 ÷ 量 反推，只有当成股时均价才落在当日高低区间内。
+    不换算的后果是电脑端盯盘把科创板成交量与买卖量都放大 100 倍。
+    """
+    line = _tx_line("sh688775", {
+        1: "影石创新", 2: "688775", 3: "110.80", 4: "103.63", 5: "103.90",
+        6: "11701851", 7: "6000000", 8: "5701851",      # 这里三个数都是「股」
+        30: "20261105161420", 33: "112.40", 34: "103.63",
+        37: "128074.37",                                 # 万元
+        47: "124.36", 48: "82.90", 51: "109.45", **_A_LEVELS})
+    rec = Recorder(replies={"qt.gtimg.cn": line})
+    row = _feed(TencentQuoteFeed, rec).get_snapshot(["688775.SH"])["688775.SH"]
+
+    assert row["raw_volume_unit"] == "share" and row["volume_unit"] == "lot"
+    assert row["volume"] == 117018.51                    # 11,701,851 股 ÷ 100
+    assert row["outer_volume"] == 60000.0 and row["inner_volume"] == 57018.51
+    # 换算后均价必须落在当日高低区间里，这是判据本身
+    assert row["low"] <= row["amount"] / (row["volume"] * 100) <= row["high"]
 
 
 def test_tx_hk_has_no_outer_inner_and_uses_shares():

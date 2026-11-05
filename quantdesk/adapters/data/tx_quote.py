@@ -66,6 +66,18 @@ _TX_LAYOUT_HK = {
 _FREQ_PARAM = {Frequency.D1: "day", Frequency.W1: "week", Frequency.MO1: "month"}
 _ADJUST_PARAM = {AdjustType.NONE: "", AdjustType.FORWARD: "qfq", AdjustType.BACKWARD: "hfq"}
 
+# 科创板（含 CDR）在腾讯串里给的是「股」，其余 A股给「手」——2026-11-05 跨源核对
+# 122 只实测：主板/创业/北交 与东财「手」逐位相等，688/689 一律差 100 倍。
+# 换算判据用成交额反推：成交额 ÷ (量×100) 落在 [最低, 最高] 里才是手，否则是股。
+_KECHUANG_PREFIX = ("688", "689")
+
+
+def _lot_divisor(code6: str, is_hk: bool) -> float:
+    """把原始成交量换算成「手」的除数（港股不用手，返回 1）。"""
+    if is_hk:
+        return 1.0
+    return 100.0 if code6.startswith(_KECHUANG_PREFIX) else 1.0
+
 
 def _f(parts: list[str], idx: int | None, default: float = 0.0) -> float:
     """按下标取数值；缺失/空串/非数字一律回默认（接口偶尔给空位）。"""
@@ -211,32 +223,37 @@ class TencentQuoteFeed(DataFeedAdapter):
         return from_internal(normalize(symbol), "tx")
 
     def _parse(self, tx_code: str, parts: list[str]) -> dict:
-        layout = _TX_LAYOUT_HK if tx_code.startswith("hk") else _TX_LAYOUT_A
+        is_hk = tx_code.startswith("hk")
+        layout = _TX_LAYOUT_HK if is_hk else _TX_LAYOUT_A
+        code6 = parts[layout["code"]].strip() if len(parts) > layout["code"] else ""
+        div = _lot_divisor(code6, is_hk)
         last = _f(parts, layout["last"])
         prev = _f(parts, layout["prev_close"])
-        vol = _f(parts, layout["volume"])
+        vol = _f(parts, layout["volume"]) / div          # 统一成：A股=手，港股=股
         amount = _f(parts, layout["amount"]) * layout.get("amount_unit", 1.0)
-        outer = _f(parts, layout.get("outer")) if layout.get("outer") is not None else None
-        inner = _f(parts, layout.get("inner")) if layout.get("inner") is not None else None
+        outer = (_f(parts, layout["outer"]) / div) if layout.get("outer") is not None else None
+        inner = (_f(parts, layout["inner"]) / div) if layout.get("inner") is not None else None
         ts_raw = parts[layout["ts"]] if layout.get("ts") is not None and \
             layout["ts"] < len(parts) else ""
         return {
-            "symbol": (f"{parts[2].strip().zfill(5)}.HK" if tx_code.startswith("hk")
+            "symbol": (f"{parts[2].strip().zfill(5)}.HK" if is_hk
                        else normalize(parts[2].strip())),
             "tx_code": tx_code,
             "name": parts[layout["name"]].strip() if len(parts) > layout["name"] else "",
             "last": last, "prev_close": prev, "open": _f(parts, layout["open"]),
             "high": _f(parts, layout["high"]), "low": _f(parts, layout["low"]),
-            "volume": vol,                                  # A股=手，港股=股
-            "volume_unit": "share" if tx_code.startswith("hk") else "lot",
+            "volume": vol,                                  # 统一口径：A股=手，港股=股
+            "volume_unit": "share" if is_hk else "lot",
+            "raw_volume_unit": "share" if (is_hk or div > 1.0) else "lot",
             "amount": amount,                               # 元 / 港元
             "outer_volume": outer, "inner_volume": inner,   # 主动买/主动卖（None=该市场不提供）
             "bids": _levels(parts, layout["bid"], 5),
             "asks": _levels(parts, layout["ask"], 5),
             "total_mv": _f(parts, layout.get("total_mv")) * layout.get("mv_unit", 1.0),
             "float_mv": _f(parts, layout.get("float_mv")) * layout.get("mv_unit", 1.0),
-            "limit_up": _f(parts, layout.get("limit_up")) or None,
-            "limit_down": _f(parts, layout.get("limit_down")) or None,
+            # 腾讯对无涨跌停（港股/退市标的）给 -1 占位——不能把 -1 当涨停价输出
+            "limit_up": (lambda v: v if v > 0 else None)(_f(parts, layout.get("limit_up"))),
+            "limit_down": (lambda v: v if v > 0 else None)(_f(parts, layout.get("limit_down"))),
             "avg_price": _f(parts, layout.get("avg_price")) or None,
             "pct_chg": (last / prev - 1.0) * 100 if prev > 0 and last > 0 else None,
             "quote_time": ts_raw.strip(),

@@ -754,3 +754,91 @@ def test_watch_service_cached_row_never_calls_feed(db, monkeypatch):
     svc = WatchService(bus=EventBus(), db_path=db, tx_feed=tx, em_feed=None)
     assert svc.cached_row("600000.SH") == {}
     assert tx.calls == 0
+
+
+# ---------------- 选股搜索接口（选择添加，不靠手打代码） ----------------
+
+class FakeEmSearch(FakeEm):
+    """带 suggest 结果的东财替身。"""
+
+    def __init__(self, rows=None, fail=False):
+        super().__init__()
+        self.rows = rows or []
+        self.fail = fail
+        self.calls = []
+
+    def search_symbols(self, query, limit=20):
+        self.calls.append((query, limit))
+        if self.fail:
+            raise ConnectionLostError("东财搜索被限流")
+        return self.rows[:limit]
+
+
+def test_search_symbols_returns_rows(db, monkeypatch):
+    monkeypatch.setattr(watch_mod, "_service", None)
+    em = FakeEmSearch(rows=[{"symbol": "688836.SH", "name": "宇树科技-W", "type": "科创板"}])
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(), em_feed=em)
+    watch_mod._service = svc
+    out = svc.search_symbols("宇树", 10)
+    assert out["error"] == "" and out["rows"][0]["symbol"] == "688836.SH"
+    assert em.calls[0][1] == 10
+
+
+def test_search_symbols_reports_unready_channel_honestly(db, monkeypatch):
+    """通道缺位时如实报错，不返回假结果。"""
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(), em_feed=FakeEm())
+    out = svc.search_symbols("茅台")
+    assert out["rows"] == [] and "未就绪" in out["error"]
+
+
+def test_search_symbols_channel_error_surfaces(db, monkeypatch):
+    monkeypatch.setattr(watch_mod, "_service", None)
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(),
+                       em_feed=FakeEmSearch(fail=True))
+    out = svc.search_symbols("茅台")
+    assert out["rows"] == [] and "限流" in out["error"]
+
+
+def test_symbols_endpoint(db, monkeypatch):
+    from quantdesk.app import app
+
+    monkeypatch.setattr(watch_mod, "_service", None)
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(),
+                       em_feed=FakeEmSearch(rows=[{"symbol": "600519.SH", "name": "贵州茅台",
+                                                   "type": "沪市主板"}]))
+    watch_mod._service = svc
+    with TestClient(app) as client:
+        body = client.get("/api/watch/symbols", params={"q": "maotai"}).json()
+        assert body["rows"][0]["name"] == "贵州茅台"
+        assert client.get("/api/watch/symbols", params={"q": "  "}).json()["rows"] == []
+
+
+# ---------------- 名称回填（修「加自选只有代号没名字」） ----------------
+
+def test_refresh_backfills_missing_names(db, monkeypatch):
+    """加自选时通道不可用导致名称缺失 → 第一次刷到行情后自动补上。"""
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(), em_feed=FakeEm())
+    svc.add("600519.SH", name="")            # 此时无名称
+    rows = repo.watchlist_list(db_path=db)
+    assert rows[0].name == ""
+
+    svc._tx = FakeTx({"600519.SH": _row("600519.SH", name="贵州茅台")})
+    svc.refresh(["600519.SH"], publish=False)
+    rows = repo.watchlist_list(db_path=db)
+    assert rows[0].name == "贵州茅台"
+
+
+def test_backfill_does_not_rewrite_unchanged_names(db, monkeypatch):
+    """名称没变就不写库（盯盘 5 秒一轮，回填不能变成每轮写库）。"""
+    svc = WatchService(bus=EventBus(), db_path=db, tx_feed=FakeTx(), em_feed=FakeEm())
+    svc.add("600519.SH", name="贵州茅台")
+    writes = []
+    real = repo.watchlist_add
+
+    def spy(*a, **k):
+        writes.append(a[0] if a else k.get("symbol"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(repo, "watchlist_add", spy)
+    svc._backfill_names([{"symbol": "600519.SH", "name": "贵州茅台"}])
+    assert writes == []
