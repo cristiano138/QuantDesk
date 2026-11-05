@@ -287,7 +287,7 @@ function TermDetail({
             重试
           </button>
           <span className="sub-note">
-            （也可以从左侧列表另点一个术语；本页数据来自后端 /api/guide，需本地服务已启动）
+            （也可以从左侧列表另点一个术语）
           </span>
         </p>
       </div>
@@ -546,7 +546,7 @@ export default function GuidePage() {
             <button className="mini" onClick={() => setRetry((v) => v + 1)}>
               重试
             </button>
-            <span className="sub-note">（本页内容全部来自后端 /api/guide，后端起来后即可恢复）</span>
+            <span className="sub-note">（连上系统后即可恢复）</span>
           </p>
         </div>
       </section>
@@ -557,7 +557,7 @@ export default function GuidePage() {
     return (
       <section>
         <h2>新手指引<HelpLink slug="guide" /></h2>
-        <p className="placeholder">正在加载术语库（分类与全部术语各一次请求，之后搜索不再请求）…</p>
+        <p className="placeholder">正在加载术语库…</p>
       </section>
     )
   }
@@ -569,7 +569,7 @@ export default function GuidePage() {
       <h2>新手指引<HelpLink slug="guide" /></h2>
       <p className="sub-note" style={{ marginBottom: 12 }}>
         零基础看盘词典：全库 {all.length} 条术语、{cats.length} 个分类。左边选分类，中间点术语，右边看解释。
-        内容全部由后端术语库提供，本页不做任何交易相关操作。
+        内容来自内置术语库，本页不做任何交易相关操作。
       </p>
 
       <div className="guide-layout">

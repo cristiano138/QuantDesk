@@ -85,6 +85,27 @@ const STATE_CN: Record<string, string> = {
 
 const MARKET_CN: Record<string, string> = { SH: '沪', SZ: '深', BJ: '北', HK: '港' }
 
+/** 行情来源在界面上只出现产品名，不出现内部代号。 */
+const FEED_CN: Record<string, string> = {
+  tx_quote: '腾讯行情',
+  em_quote: '东方财富行情',
+  local_parquet: '本机已保存',
+}
+
+const FLOW_SRC_CN: Record<string, string> = {
+  official_outer_inner: '官方内外盘',
+  quote_only: '仅快照',
+  em_tick: '东方财富逐笔',
+}
+
+function feedCn(name: string): string {
+  if (!name) return '—'
+  return name
+    .split('+')
+    .map((n) => (n.startsWith('local_error') ? '本机历史数据读取失败' : FEED_CN[n] ?? n))
+    .join(' + ')
+}
+
 /** 后端两个源都把 volume_unit 写成 lot/share（不是中文），这里统一成中文单位。 */
 const UNIT_CN: Record<string, string> = { lot: '手', share: '股', 手: '手', 股: '股' }
 const CUR_CN: Record<string, string> = { CNY: '元', HKD: '港元', 元: '元', 港元: '港元' }
@@ -341,9 +362,9 @@ function OrderBook({ detail }: { detail: WatchDetail | null }) {
   if (bids.length === 0 && asks.length === 0) {
     return (
       <p className="placeholder">
-        五档盘口：本次详情未返回档位（{note || '时段未知'}）。
-        港股收盘后接口把档位给 0 属正常；A股收盘后通常仍保留收盘时的挂单档位，
-        整池都是空档才需要怀疑通道。
+        五档盘口：本次没有返回档位（{note || '时段未知'}）。
+        港股收盘后五档显示为 0 属正常；A股收盘后通常仍保留收盘时的挂单，
+        整池都是空档才需要检查行情是否正常。
       </p>
     )
   }
@@ -390,7 +411,7 @@ function OrderBook({ detail }: { detail: WatchDetail | null }) {
         <tbody>{rows}</tbody>
       </table>
       <p className="sub-note">{note}——价位单位随标的计价币种（A股=元，港股=港元），量单位 {unit || '—'}。
-        港股收盘后档位给 0 属正常；A股收盘后仍会保留收盘时的挂单，判断新旧看「抓取时间」而不是看档位空不空。</p>
+        港股收盘后五档显示为 0 属正常；A股收盘后仍会保留收盘时的挂单，判断新旧看「抓取时间」而不是看档位空不空。</p>
     </>
   )
 }
@@ -406,7 +427,6 @@ function FlowPanel({ flow }: { flow: WatchFlow | null }) {
   const hasOfficial = outer != null || inner != null
   const maxBar = Math.max(1, outer ?? 0, inner ?? 0)
   const buckets = flow.buckets ?? {}
-  const sideMap = flow.side_map ?? {}
   const tickTotal = flow.tick_buy_volume + flow.tick_sell_volume + flow.tick_neutral_volume
 
   return (
@@ -416,9 +436,9 @@ function FlowPanel({ flow }: { flow: WatchFlow | null }) {
         <span className="tag">主口径=官方外盘/内盘</span>
         <span className="tag">量单位：{unit || flow.unit || '—'}</span>
         <span className="tag">金额单位：{cur}</span>
-        <span className="tag">来源：{flow.flow_source || '—'}</span>
+        <span className="tag">数据口径：{FLOW_SRC_CN[flow.flow_source] ?? '—'}</span>
         <span className={flow.calibrated ? 'badge badge-paper' : 'badge badge-live'}>
-          方向码{flow.calibrated ? '已与官方校准' : '未与官方对齐'}
+          买卖方向{flow.calibrated ? '已与官方数据核对' : '未与官方数据核对'}
         </span>
       </div>
 
@@ -466,7 +486,7 @@ function FlowPanel({ flow }: { flow: WatchFlow | null }) {
         逐笔分层明细（小/中/大/特大 × 买/卖，按单笔成交额分档；下列合计含盘后成交）
       </h4>
       {Object.keys(buckets).length === 0 ? (
-        <p className="placeholder">无逐笔分层数据（东财逐笔通道未就绪，或当日无逐笔）。</p>
+        <p className="placeholder">暂无逐笔分档数据（逐笔明细暂不可用，或当日无逐笔）。</p>
       ) : (
         <table>
           <thead>
@@ -505,15 +525,9 @@ function FlowPanel({ flow }: { flow: WatchFlow | null }) {
         逐笔合计相对官方总量差 {flow.tick_vs_official_pct == null ? '—' : `${flow.tick_vs_official_pct > 0 ? '+' : ''}${flow.tick_vs_official_pct.toFixed(2)}%`}
         ——这是预期内的口径差（逐笔包含盘后成交，官方内外盘不含），不是数据错误；所以买卖量以官方内外盘为准，逐笔只做明细与分层。
       </p>
-      <p className="sub-note">
-        方向码映射：
-        {Object.keys(sideMap).length === 0
-          ? '（暂无，未取到逐笔）'
-          : Object.entries(sideMap).map(([code, side]) => ` ${code}=${SIDE_CN[side] ?? side}`).join('，')}
-      </p>
       {!flow.calibrated && (
         <p className="warn sub-note">
-          逐笔分层未与官方内外盘对齐（误差过大或样本不足）——分层数字仅按逐笔口径给出，不能当作权威买卖力量。
+          逐笔买卖方向暂未与官方内外盘核对一致（误差过大或样本不足）——分档数据仅按逐笔成交汇总给出，不能当作权威买卖力量。
         </p>
       )}
       <p className="sub-note">{flow.caveat}</p>
@@ -589,7 +603,7 @@ export default function WatchPage() {
       if (!mounted.current) return
       setRows(r.list)
       setStatus(r.status)
-      setIdleNote(r.skipped ? `休市中：${r.reason || '未外呼，显示当日最后一次快照'}` : '')
+      setIdleNote(r.skipped ? `休市中：${r.reason || '未取最新数据，显示当日最后一次行情'}` : '')
       setErr('list', '')
       setSymbol((cur) => cur || (r.list[0]?.symbol ?? ''))
     } catch (e) {
@@ -869,7 +883,7 @@ export default function WatchPage() {
 
       {(errList.length > 0 || liveErr) && (
         <div className="alert-banner">
-          {liveErr && <p><b>服务端最近一次刷新失败原文：</b>{liveErr}</p>}
+          {liveErr && <p><b>最近一次刷新未成功：</b>{liveErr}</p>}
           {errList.map(({ k, msg }) => (
             <p key={k}><b>{ERR_LABEL[k]}：</b>{msg}</p>
           ))}
@@ -879,7 +893,7 @@ export default function WatchPage() {
       {/* ---------- 顶部状态条 ---------- */}
       <div className="card">
         <div className="filter-row">
-          <span className="badge">服务器时间 {status?.server_time ?? '—'}</span>
+          <span className="badge">当前时间 {status?.server_time ?? '—'}</span>
           {sess?.CN && (
             <span className={sess.CN.state === 'open' ? 'badge badge-paper' : 'badge'}>
               A股：{STATE_CN[sess.CN.state] ?? sess.CN.state}
@@ -903,11 +917,11 @@ export default function WatchPage() {
           {Object.entries(feeds).map(([name, f]) => (
             <span key={name} className="badge">
               <span className={f?.ready ? (f.connected ? 'lamp lamp-ready' : 'lamp lamp-unready') : 'lamp lamp-down'} />
-              {name}：{f?.ready ? (f.connected ? '就绪·已连接' : '就绪·未连接') : '未就绪'}
+              {feedCn(name)}：{f?.ready ? (f.connected ? '已连接' : '待连接') : '暂不可用'}
             </span>
           ))}
           <span className={status?.calibrated ? 'badge badge-paper' : 'badge badge-live'}>
-            方向码{status?.calibrated ? '已校准' : '未校准'}
+            逐笔买卖方向{status?.calibrated ? '已核对' : '未核对'}
           </span>
           <label className="check-line" style={{ flexDirection: 'row' }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -922,12 +936,12 @@ export default function WatchPage() {
           <button
             className="mini"
             disabled={busy}
-            title="强制取最新（会真实请求行情接口）"
+            title="立即取一次最新行情"
             onClick={() => void manualRefresh()}
           >
             {busy ? '刷新中…' : '立即刷新'}
           </button>
-          <span className="sub-note">立即刷新＝强制取最新（会真实请求行情接口）</span>
+          <span className="sub-note">立即刷新＝马上取一次最新行情（休市时也能取到当日收盘值）</span>
         </div>
         <p className="sub-note">
           盯盘池 {status?.pool_size ?? 0} 只 · 列表刷新 {status?.last_refresh_at ? fmtTsMs(status.last_refresh_at) : '尚未刷新'}
@@ -935,11 +949,7 @@ export default function WatchPage() {
           {detail?.snapshot.stale ? ' · 当前标的是旧快照' : ''}
         </p>
         {idleNote ? <p className="warn">{idleNote}</p> : null}
-        <p className="sub-note">
-          服务端累计：快照 {status?.stats?.snapshots ?? '—'} 行 · 逐笔调用 {status?.stats?.flow_calls ?? '—'} 次 ·
-          失败 {status?.stats?.errors ?? '—'} 次 · 陈旧 {status?.stats?.stale ?? '—'} 次 ·
-          {status?.note ?? ''}
-        </p>
+        {status?.note ? <p className="sub-note">{status.note}</p> : null}
       </div>
 
       {/* ---------- 标的池管理 ---------- */}
@@ -948,7 +958,7 @@ export default function WatchPage() {
           <h3>盯盘标的池</h3>
           <div className="watch-add" style={{ flex: 1, minWidth: 260 }}>
             <input
-              placeholder="代码逗号分隔批量添加，如 600000.SH,00700.HK（也支持 600519、hk00700，后端会归一化）"
+              placeholder="代码逗号分隔批量添加，如 600000.SH,00700.HK（也支持 600519、hk00700）"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void addPool() }}
@@ -973,7 +983,7 @@ export default function WatchPage() {
         )}
         {status && status.pool.length === 0 && (
           <p className="placeholder">
-            盯盘池为空：添加代码后才会外呼行情（空池不外呼）。
+            盯盘池为空：添加代码后才会开始取行情。
             也可以点「从自选股导入」把
             <Link to="/market" style={{ color: '#1d4ed8', margin: '0 4px' }}>行情面板</Link>
             的自选一次性带过来。不懂这套代码写法看
@@ -989,7 +999,7 @@ export default function WatchPage() {
           <span className="sub-note">点击行切换标的 · 红涨绿跌 · 灰底行=陈旧数据</span>
         </div>
         {rows.length === 0 ? (
-          <p className="placeholder">列表为空：池子为空，或行情通道未就绪（原因见上方错误条原文）。</p>
+          <p className="placeholder">列表为空：盯盘池还没有标的，或行情暂时取不到（原因见上方提示）。</p>
         ) : (
           <table>
             <thead>
@@ -1034,9 +1044,9 @@ export default function WatchPage() {
           </table>
         )}
         <p className="sub-note">
-          口径：外盘/内盘=主动买入/卖出累计量（A股两源实测逐位一致：腾讯 outer 与东财 f49；
-          港股腾讯不给，取东财 f49 单源）；A股量单位=手（1 手=100 股），
-          港股量单位=股；金额单位 A股=元、港股=港元。取不到该字段的标的显示 —，不是 0。
+          口径：外盘/内盘＝主动买入/卖出累计量（A股的腾讯与东方财富两家数据一致；
+          港股只有东方财富提供）；A股量单位＝手（1 手＝100 股），港股量单位＝股；
+          金额单位 A股＝元、港股＝港元。取不到该字段的标的显示 —，不是 0。
         </p>
       </div>
 
@@ -1057,11 +1067,11 @@ export default function WatchPage() {
               {snap.stale ? <span className="badge badge-down">陈旧快照（本轮未取到实时数据）</span> : <span className="badge">实时快照</span>}
               <span className="sub-note">
                 详情刷新 {fmtTsMs(snap.fetched_at as number | undefined)} · 逐笔更新 {fmtTsMs(detail?.flow?.updated_at)}
-                {detail?.quote_extra_error ? ` · 个股字段取数失败：${detail.quote_extra_error}` : ''}
-                {detail?.intraday_error ? ` · 分时取数失败：${detail.intraday_error}` : ''}
+                {detail?.quote_extra_error ? ` · 个股资料获取失败：${detail.quote_extra_error}` : ''}
+                {detail?.intraday_error ? ` · 分时数据获取失败：${detail.intraday_error}` : ''}
               </span>
             </div>
-            {!detail && <p className="placeholder">详情加载中（该接口会实打实调用外部行情，最长十几秒）…</p>}
+            {!detail && <p className="placeholder">正在获取最新行情，最长十几秒…</p>}
             <div className="metric-cards">
               {metrics.map((m) => (
                 <div key={m.label} className="card metric-card">
@@ -1071,8 +1081,8 @@ export default function WatchPage() {
               ))}
             </div>
             <p className="sub-note">
-              「—」表示该字段本次没返回（不同市场/通道字段集不一样），不是 0。
-              字段来源：腾讯批量快照 + 东财个股快照（{detail ? Object.entries(detail.feeds ?? {}).map(([n, f]) => `${n}=${f?.ready ? '就绪' : '未就绪'}`).join('，') : '—'}）。
+              「—」表示该字段本次没有数据（不同市场能看到的字段不一样），不是 0。
+              数据来源：腾讯行情 + 东方财富行情（{detail ? Object.entries(detail.feeds ?? {}).map(([n, f]) => `${feedCn(n)}=${f?.ready ? '正常' : '暂不可用'}`).join('，') : '—'}）。
             </p>
           </div>
 
@@ -1088,11 +1098,11 @@ export default function WatchPage() {
             <div className="row-btns">
               <h3>分时（价格 / 均价 + 分钟主动买卖量）</h3>
               <span className="tag">量单位：{flowUnit || '—'}</span>
-              <span className="sub-note">买卖量柱来自逐笔分钟聚合（含盘后），折线来自东财分时</span>
+              <span className="sub-note">买卖量柱由逐笔成交按分钟汇总（含盘后），折线为分时走势</span>
             </div>
             {intraday.length === 0 && minutes.length === 0 ? (
               <p className="placeholder">
-                暂无分时数据{detail?.intraday_error ? `（后端原文：${detail.intraday_error}）` : '（休市、新上市或东财分时通道未就绪）'}。
+                暂无分时数据{detail?.intraday_error ? `（原因：${detail.intraday_error}）` : '（休市、新上市或数据暂不可用）'}。
               </p>
             ) : (
               <IntradayChart points={intraday} minutes={minutes} unit={flowUnit || '量'} />
@@ -1116,14 +1126,14 @@ export default function WatchPage() {
             </div>
             {klineRows.length === 0 ? (
               <p className="placeholder">
-                暂无 K 线{errors.kline ? `（后端原文：${errors.kline}）` : ''}。
-                A股优先读本地 Parquet，缺数据回落腾讯源；60 秒自动重试。
+                暂无 K 线{errors.kline ? `（原因：${errors.kline}）` : ''}。
+                优先使用本机已下载的历史 K 线，没有时改取腾讯行情；每 60 秒自动重试。
               </p>
             ) : (
               <>
                 <KLineChart rows={klineRows} />
                 <p className="sub-note">
-                  来源 {klineMeta?.source || '—'} · 复权 {ADJUST_CN[klineMeta?.adjust ?? ''] ?? klineMeta?.adjust ?? '—'} ·
+                  来源 {feedCn(klineMeta?.source ?? '')} · 复权 {ADJUST_CN[klineMeta?.adjust ?? ''] ?? klineMeta?.adjust ?? '—'} ·
                   量单位 {klineMeta?.unit || '—'} · 共 {klineRows.length} 根（{klineRows[0]?.dt ?? '—'} ~ {klineRows[klineRows.length - 1]?.dt ?? '—'}）
                   {klineMeta?.note ? ` · ${klineMeta.note}` : ''}
                 </p>
@@ -1149,24 +1159,21 @@ export default function WatchPage() {
               <button className="mini" disabled={!tickPage || tickOffset + PAGE >= (tickPage.total ?? 0)}
                 onClick={() => setTickOffset((o) => o + PAGE)}>下一页</button>
             </div>
-            {tickPage?.side_map && Object.keys(tickPage.side_map).length > 0 && (
-              <p className="sub-note">
-                方向码：{Object.entries(tickPage.side_map).map(([c, s]) => `${c}=${SIDE_CN[s] ?? s}`).join('，')}
-                {tickPage.calibrated === false && ' · 未与官方内外盘对齐，方向列仅供参考（unknown 表示该码语义未定）'}
-              </p>
+            {tickPage?.calibrated === false && (
+              <p className="sub-note">买卖方向暂未与官方内外盘核对一致，方向列仅供参考。</p>
             )}
             {!tickPage ? (
               <p className="placeholder">{errors.ticks ? `逐笔明细未取到（${errors.ticks}）` : '逐笔明细加载中…'}</p>
             ) : tickPage.rows.length === 0 ? (
               <p className="placeholder">
-                本筛选条件下无逐笔记录{tickPage.error ? `（后端原文：${tickPage.error}）` : '（休市/新上市/通道未就绪）'}。
+                本筛选条件下无逐笔记录{tickPage.error ? `（原因：${tickPage.error}）` : '（休市 / 新上市 / 数据暂不可用）'}。
               </p>
             ) : (
               <table>
                 <thead>
                   <tr>
                     <th>时间</th><th>价格</th><th>成交量({flowUnit})</th><th>笔数</th>
-                    <th>成交额({flowCur})</th><th>方向</th><th>原始码</th>
+                    <th>成交额({flowCur})</th><th>方向</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1180,7 +1187,6 @@ export default function WatchPage() {
                       <td className={t.direction === 'buy' ? 'up' : t.direction === 'sell' ? 'down' : undefined}>
                         {SIDE_CN[t.direction] ?? t.direction}
                       </td>
-                      <td className="mono">{t.side_code}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1189,17 +1195,17 @@ export default function WatchPage() {
           </div>
 
           <div className="card">
-            <h3>当日定格与历史（收盘后落库，复盘用）</h3>
+            <h3>当日定格与历史（收盘后自动保存，复盘用）</h3>
             {hist.length === 0 ? (
               <p className="placeholder">
-                {errors.history ? `历史读取失败（${errors.history}）` : '还没有本标的的定格记录（每日收盘后由后端落库），已有则自动出现在此。'}
+                {errors.history ? `历史读取失败（${errors.history}）` : '还没有本标的的定格记录（每日收盘后自动保存），有记录后会自动出现在这里。'}
               </p>
             ) : (
               <table>
                 <thead>
                   <tr>
                     <th>交易日</th><th>收盘</th><th>涨跌</th><th>外盘(买)</th><th>内盘(卖)</th>
-                    <th>大单买</th><th>大单卖</th><th>成交额</th><th>口径</th><th>方向码</th>
+                    <th>大单买</th><th>大单卖</th><th>成交额</th><th>数据口径</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1216,8 +1222,9 @@ export default function WatchPage() {
                         <td className="up">{fmtQty(h.big_buy_volume, u)}</td>
                         <td className="down">{fmtQty(h.big_sell_volume, u)}</td>
                         <td>{fmtMoney(h.amount, cur)}</td>
-                        <td className="sub-note" style={{ margin: 0 }}>{h.flow_source || '—'}{h.staled ? ' · 陈旧' : ''}</td>
-                        <td className="mono">{h.side_map || '—'}</td>
+                        <td className="sub-note" style={{ margin: 0 }}>
+                          {FLOW_SRC_CN[h.flow_source] ?? '—'}{h.staled ? ' · 陈旧' : ''}
+                        </td>
                       </tr>
                     )
                   })}

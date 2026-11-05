@@ -73,9 +73,9 @@ class EastmoneyQuoteFeed(DataFeedAdapter):
     """东财公开行情：逐笔成交 + 分时 + 个股全量快照（A股 / 港股）。"""
 
     name = _NAME
-    label = "东方财富公开行情（A股/港股，只读，非官方接口）"
-    prereq = ("无需账号与权限：本机可出站访问 push2.eastmoney.com 即可。"
-              "公开接口有反爬限流，连续猛打会被临时封（本通道自带限速与熔断退避）。")
+    label = "东方财富行情（A股/港股，只读，非官方软件）"
+    prereq = ("无需账号与权限，联网即可使用。免费来源有访问频率限制，连续频繁请求会被临时限制，"
+              "本来源会自动放慢并冷却。")
     official = False
     requires: tuple[str, ...] = ()
     default_enabled = True

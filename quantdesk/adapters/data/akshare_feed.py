@@ -65,8 +65,8 @@ def normalize_history(df: pd.DataFrame, colmap: dict[str, str]) -> pd.DataFrame:
 
 class AkshareFeed(DataFeedAdapter):
     name = "akshare"
-    label = "AKShare（东财/新浪等公开接口）"
-    prereq = "无需注册与 token；反爬约 1 req/s，批量拉数请放慢限速"
+    label = "免费公开行情（东方财富 / 新浪等）"
+    prereq = "无需开户与账号，联网即可使用；免费来源有取数频率限制，批量拉取会自动放慢节奏"
     requires = ("akshare",)
     capabilities = frozenset({FeedCapability.HISTORY_BAR, FeedCapability.FINANCIAL})
 

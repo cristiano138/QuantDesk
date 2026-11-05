@@ -127,7 +127,7 @@ def test_channel_metadata_declares_non_official_channel():
     p = EasytraderBroker.prereq
     for kw in ("独立下单程序", "锁", "设置页", "非官方"):
         assert kw in p
-    assert "GUI 自动化" in EasytraderBroker.label
+    assert "同花顺" in EasytraderBroker.label
 
 
 def test_mapping_tables_are_declared_before_use():

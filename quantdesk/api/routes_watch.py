@@ -136,7 +136,7 @@ def kline(symbol: str, freq: str = "1d", days: int = 250,
         raise HTTPException(status_code=400, detail=str(e)) from e
     if f not in (Frequency.D1, Frequency.W1, Frequency.MO1):
         raise HTTPException(status_code=400,
-                            detail="盯盘 K 线只支持 1d/1w/1M；分钟级看分时接口")
+                            detail="盯盘 K 线只支持日/周/月；分钟级请看分时")
     sym = normalize(symbol)
     end = datetime.now()
     start = end - timedelta(days=int(days) * 2 + 30)
@@ -171,6 +171,6 @@ def kline(symbol: str, freq: str = "1d", days: int = 250,
         source = (source + "+" if source else "") + "tx_quote"
     return {"symbol": sym, "freq": f.value, "adjust": a.value, "source": source,
             "unit": "股" if sym.endswith(".HK") else "手",
-            "note": "腾讯源不返回成交额（amount=0）；A股优先本地 Parquet" if "tx_quote" in source
+            "note": "腾讯行情不返回成交额（记为 0）；A 股优先使用本机已保存的日线" if "tx_quote" in source
                     else "",
             "rows": rows[-int(days):]}

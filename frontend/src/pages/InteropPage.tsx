@@ -385,7 +385,7 @@ export default function InteropPage() {
                 通达信安装目录读不到：{tdxErr}
                 <button className="mini" style={{ marginLeft: 6 }} onClick={loadTdxDir}>重试</button>
                 <br />
-                这不代表你没配置——配置很可能仍在设置页里，只是后端没连上取不回来。
+                这不代表你没配置——配置很可能仍在设置页里，只是暂时读不到。
                 连不上时也请先别改设置，避免覆盖掉原有目录。
               </p>
             )}

@@ -28,6 +28,16 @@ import {
 } from '../api/client'
 import HelpLink from '../components/HelpLink'
 
+/** 行情来源在界面上只出现产品名，不出现内部代号。 */
+const FIN_SRC_CN: Record<string, string> = {
+  akshare: '免费公开数据',
+  tushare: 'Tushare 专业行情',
+  ths_ifind: '同花顺 iFinD',
+  qmt_xtdata: 'miniQMT 行情',
+  tdx_aidata: '通达信行情',
+  federated: '自动选择的来源',
+}
+
 const FREQ_LABELS: Record<string, string> = {
   '1d': '日',
   '1w': '周',
@@ -216,8 +226,8 @@ function FinTable({ doc }: { doc: FinancialDoc }) {
   return (
     <div className="fin-wrap">
       <p className="sub-note">
-        {doc.symbol} · {doc.report_type} · 共 {doc.rows} 项指标 · 源 {doc.source}
-        {doc.cached ? '（本机缓存）' : ''}｜{doc.note}
+        {doc.symbol} · {FIN_TYPE_LABELS[doc.report_type as FinReportType] ?? doc.report_type} · 共 {doc.rows} 项指标 · 来源 {FIN_SRC_CN[doc.source] ?? doc.source}
+        {doc.cached ? '（本机已保存）' : ''}｜{doc.note}
       </p>
       <table className="fin-table">
         <thead>
@@ -331,7 +341,7 @@ export default function MarketPage() {
         })
         .catch(() => {
           setTick(null)
-          setSnapNote('连不上后端（快照接口失败）')
+          setSnapNote('连不上系统（最新行情读取失败）')
         })
     load()
     const t = setInterval(load, 1000)
@@ -366,7 +376,7 @@ export default function MarketPage() {
           {watchErr && <p className="badge badge-down">自选股读取失败：{watchErr}</p>}
           {watchErr && (
             <p className="sub-note">
-              连不上后端时不会把这里显示成「没有自选股」——
+              连不上系统时不会把这里显示成「没有自选股」——
               <button className="mini" onClick={loadWatchlist}>重试</button>
             </p>
           )}
@@ -490,7 +500,7 @@ export default function MarketPage() {
             {!loading && tab === 'kline' && bars.length === 0 && !err && (
               <p className="placeholder">
                 本地还没有 {symbol} 的 {FREQ_LABELS[freq] ?? freq}数据——这不是行情丢了，是这台机器上
-                还没下载过。K 线全部读本地 Parquet，请去
+                还没下载过。K 线使用本机已下载的数据，请去
                 <Link to="/data" style={{ color: '#1d4ed8', margin: '0 4px' }}>数据管理</Link>
                 页把这只标的下载下来（下载完回到这里就能看到）。
                 <br />
@@ -517,8 +527,8 @@ export default function MarketPage() {
               ) : finLoading ? (
                 <p className="placeholder">
                   正在取 {symbol} 的{FIN_TYPE_LABELS[finType]}…
-                  首次要外呼公开接口（AKShare，免账号），约 3~10 秒；同一标的同一表种本机缓存 5 分钟，
-                  来回切换不会再等。港股没有新浪三表（会如实报错），财务摘要同样不适用。
+                  首次获取约需 3~10 秒（免费数据来源）；同一标的同一报表 5 分钟内不重复获取，
+                  来回切换不会再等。港股没有新浪三表（会如实提示），财务摘要同样不适用。
                 </p>
               ) : finErr ? (
                 <p className="badge badge-down">

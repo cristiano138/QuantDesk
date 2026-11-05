@@ -24,18 +24,30 @@ import HelpLink from '../components/HelpLink'
 const RISK_CONFIRM_TEXT = '我知晓并承担实盘交易风险'
 
 const CAP_CN: Record<string, string> = {
-  history_bar: '历史K线',
-  realtime_tick: '实时Tick',
-  realtime_bar: '实时Bar',
+  history_bar: '历史 K 线',
+  realtime_tick: '实时行情',
+  realtime_bar: '实时 K 线',
   financial: '财务数据',
   transaction: '逐笔成交',
-  dynamic: '动态聚合',
+  dynamic: '多源组合',
 }
 
 const STATUS_TEXT: Record<string, string> = {
-  ready: '就绪',
-  unready: '未就绪',
-  disabled: '已禁用',
+  ready: '可用',
+  unready: '需先安装',
+  disabled: '已关闭',
+}
+
+/** 行情来源在界面上只出现产品名，不出现内部代号。 */
+const FEED_CN: Record<string, string> = {
+  qmt_xtdata: 'miniQMT 行情',
+  tdx_aidata: '通达信行情',
+  tx_quote: '腾讯行情',
+  em_quote: '东方财富行情',
+  akshare: '免费公开数据',
+  tushare: 'Tushare 专业行情',
+  ths_ifind: '同花顺 iFinD',
+  paper: '内置模拟盘',
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -44,8 +56,8 @@ const KIND_LABEL: Record<string, string> = {
   trade_missing_local: '券商有成交、本地无记录',
   position_mismatch: '持仓不一致',
   account_mismatch: '资金不一致',
-  // 每轮无差异也落一条：它是审计证据，不是差异，所以不给「标为已处置」
-  clean: '本轮无差异（审计记录）',
+  // 每轮无差异也留一条记录：它是核对留痕，不是差异，所以不给「标为已处置」
+  clean: '本轮核对无差异（留痕）',
 }
 
 function lampClass(c: ChannelInfo): string {
@@ -87,7 +99,7 @@ function ChannelRow({ row, onChanged }: { row: ChannelInfo; onChanged: () => voi
         <td>
           {STATUS_TEXT[row.status] ?? row.status}
           {row.status === 'unready' && row.missing.length > 0 && (
-            <span className="sub-note">（缺 {row.missing.join('、')}）</span>
+            <span className="sub-note">（需先安装并登录对应软件）</span>
           )}
         </td>
         <td>
@@ -99,11 +111,11 @@ function ChannelRow({ row, onChanged }: { row: ChannelInfo; onChanged: () => voi
         </td>
         <td>{row.connected ? <span className="badge badge-paper">已连接</span> : <span className="sub-note">—</span>}</td>
         <td>
-          {!row.official && <span className="dialog-red">非官方接口，稳定性低</span>}
+          {!row.official && <span className="dialog-red">非官方软件，稳定性低</span>}
         </td>
         <td>
           <button className="mini" disabled={probing} onClick={probe}>
-            {probing ? '探活中…' : '测试连接'}
+            {probing ? '检测中…' : '测试连接'}
           </button>
           {probeMsg && <span className="sub-note">{probeMsg}</span>}
         </td>
@@ -111,26 +123,10 @@ function ChannelRow({ row, onChanged }: { row: ChannelInfo; onChanged: () => voi
       <tr className="detail-row">
         <td colSpan={7}>
           <details>
-            <summary>接入引导 / 诊断</summary>
-            <p className="prereq">{row.prereq || '（后端未提供前置说明）'}</p>
-            {row.reason && <p className="dialog-red">原因：{row.reason}</p>}
-            {row.requires.length > 0 && (
-              <p className="sub-note">
-                依赖：{row.requires.join('、')}
-                {row.requires_any ? '（任一可用即可）' : '（全部需要）'}
-              </p>
-            )}
-            {!row.default_enabled && (
-              <p className="sub-note">
-                默认禁用，需设置项 {row.enable_flag || '（未声明）'} 打开后进入交易视野。
-              </p>
-            )}
-            {row.channel_health && (
-              <p className="sub-note">
-                探活 {row.channel_health.probes} 次 / 失败 {row.channel_health.probe_failures}
-                {' '}· 重连 {row.channel_health.reconnects} 次 · 状态 {row.channel_health.state}
-                {row.channel_health.last_error ? ` · 最近错误 ${row.channel_health.last_error}` : ''}
-              </p>
+            <summary>如何启用</summary>
+            <p className="prereq">{row.prereq || '（暂未提供说明）'}</p>
+            {row.reason && row.status === 'unready' && (
+              <p className="dialog-red">还没有检测到对应的行情或交易软件，请先安装并登录。</p>
             )}
           </details>
         </td>
@@ -177,9 +173,9 @@ function VaultSection({ spec }: { spec: ChannelsOverview['credentials_spec'] }) 
 
   return (
     <div className="card">
-      <h3>凭据保险库</h3>
-      <p className="dialog-red">加密存储于本机 Windows 账户，换机需重录；保存后不回显明文。</p>
-      {spec.length === 0 && <p className="placeholder">后端未提供凭据项。</p>}
+      <h3>账户与密钥</h3>
+      <p className="dialog-red">加密保存在本机账户下，换电脑需重新录入；保存后不再显示原文。</p>
+      {spec.length === 0 && <p className="placeholder">暂不需要填写账户信息。</p>}
       {spec.map((s) => {
         const secret = isSecretKey(s.key)
         return (
@@ -200,13 +196,13 @@ function VaultSection({ spec }: { spec: ChannelsOverview['credentials_spec'] }) 
           </label>
         )
       })}
-      <h4>已存凭据（掩码）</h4>
+      <h4>已保存的账户信息（隐藏显示）</h4>
       {stored.length > 0 ? (
         <table>
           <thead>
             <tr>
-              <th>键名</th>
-              <th>掩码</th>
+              <th>项目</th>
+              <th>显示</th>
               <th />
             </tr>
           </thead>
@@ -225,7 +221,7 @@ function VaultSection({ spec }: { spec: ChannelsOverview['credentials_spec'] }) 
           </tbody>
         </table>
       ) : (
-        <p className="placeholder">尚未录入任何凭据。</p>
+        <p className="placeholder">还没有填写任何账户信息。</p>
       )}
       {msg && <p className="badge badge-paper">{msg}</p>}
       {err && <p className="badge badge-down">{err}</p>}
@@ -233,7 +229,7 @@ function VaultSection({ spec }: { spec: ChannelsOverview['credentials_spec'] }) 
   )
 }
 
-function ReconcileSection() {
+function ReconcileSection({ labelOf }: { labelOf: (name: string) => string }) {
   const [diffs, setDiffs] = useState<ReconcileDiff[]>([])
   const [status, setStatus] = useState<ChannelsOverview['reconcile'] | null>(null)
   const [running, setRunning] = useState(false)
@@ -290,12 +286,12 @@ function ReconcileSection() {
 
   return (
     <div className="card">
-      <h3>对账</h3>
+      <h3>持仓与资金核对</h3>
       {status && (
         <p className="sub-note">
           上次核对：{status.ran_at ? new Date(status.ran_at).toLocaleString('zh-CN') : '尚未执行'}
-          {' '}· 通道 {status.channel || '—'} · 周期 {status.interval_s}s ·
-          {status.running ? ' 运行中' : ' 未运行'}
+          {' '}· 来源 {status.channel ? labelOf(status.channel) : '—'} · 每 {status.interval_s} 秒自动核对 ·
+          {status.running ? ' 正在核对' : ' 当前未运行'}
           {status.diffs != null ? ` · 本轮差异 ${status.diffs} 项` : ''}
           {status.open != null ? ` · 待处置 ${status.open} 项` : ''}
           {status.skipped ? ` · 跳过原因：${status.skipped}` : ''}
@@ -303,12 +299,12 @@ function ReconcileSection() {
       )}
       <div className="row-btns" style={{ gap: 8 }}>
         <button className="mini" disabled={running} onClick={runNow}>
-          {running ? '对账中…' : '立即对账'}
+          {running ? '核对中…' : '立即核对'}
         </button>
         <button className="mini" onClick={() => setOnlyOpen((v) => !v)}>
           {onlyOpen ? '看全部（含已处置）' : '只看未处置'}
         </button>
-        <label className="mini" title="每轮对账即使无差异也落一条记录（审计证据）；默认不显示，否则列表被心跳淹没">
+        <label className="mini" title="每轮核对即使没有差异也会留下一条记录；默认不显示">
           <input type="checkbox" checked={includeClean}
                  onChange={(e) => setIncludeClean(e.target.checked)} />
           {' '}含每轮无差异记录
@@ -322,9 +318,8 @@ function ReconcileSection() {
               <th>时间</th>
               <th>类型</th>
               <th>对象</th>
-              <th>通道</th>
+              <th>来源</th>
               <th>处置</th>
-              <th />
             </tr>
           </thead>
           <tbody>
@@ -333,7 +328,7 @@ function ReconcileSection() {
                 <td>{new Date(d.ran_at).toLocaleString('zh-CN')}</td>
                 <td>{KIND_LABEL[d.kind] ?? d.kind}</td>
                 <td>{d.ref}</td>
-                <td>{d.channel}</td>
+                <td>{labelOf(d.channel)}</td>
                 <td>
                   {d.kind === 'clean' ? (
                     <span className="sub-note">—（本轮无差异，无需处置）</span>
@@ -356,18 +351,12 @@ function ReconcileSection() {
                         className="mini"
                         disabled={busy === d.id}
                         onClick={() => void mark(d.id, true)}
-                        title="标为已处置：这条差异有人认领并给出了结论，红条不再统计它"
+                        title="标为已处置：这条差异已有人核对并留下结论，不再计入待处置"
                       >
                         标为已处置
                       </button>
                     </span>
                   )}
-                </td>
-                <td>
-                  <details>
-                    <summary>展开</summary>
-                    <pre className="logs">{JSON.stringify(d.detail, null, 2)}</pre>
-                  </details>
                 </td>
               </tr>
             ))}
@@ -376,8 +365,8 @@ function ReconcileSection() {
       ) : (
         <p className="placeholder">
           {onlyOpen
-            ? '没有待处置的差异。已处置的记录点「看全部（含已处置）」回看——差异要留档，不能处置完就消失。'
-            : '暂无差异记录（还没跑过对账的话，点上面「立即对账」）。'}
+            ? '没有待处置的差异。已处置的记录点「看全部（含已处置）」回看。'
+            : '暂无差异记录（还没核对过的话，点上面「立即核对」）。'}
         </p>
       )}
     </div>
@@ -398,7 +387,7 @@ function RealtimeSection() {
 
   return (
     <div className="card">
-      <h3>实时泵</h3>
+      <h3>实时行情</h3>
       <button className="mini" onClick={refresh}>
         刷新
       </button>
@@ -406,16 +395,15 @@ function RealtimeSection() {
       {rt ? (
         <>
           <p className="sub-note">
-            当前实时源：<b>{rt.realtime_source || '（无）'}</b> · 已盯标的 {rt.watched.length} 只 ·
-            ticks {rt.ticks_seen} · bars {rt.bars_emitted}
+            当前行情来源：<b>{FEED_CN[rt.realtime_source] ?? (rt.realtime_source || '（无）')}</b> · 正在跟踪 {rt.watched.length} 只标的
           </p>
           {entries.length > 0 ? (
             <table>
               <thead>
                 <tr>
                   <th>策略</th>
-                  <th>聚合周期</th>
-                  <th>订阅标的</th>
+                  <th>K 线周期</th>
+                  <th>关注的股票</th>
                 </tr>
               </thead>
               <tbody>
@@ -429,7 +417,7 @@ function RealtimeSection() {
               </tbody>
             </table>
           ) : (
-            <p className="placeholder">没有策略向实时泵订阅。</p>
+            <p className="placeholder">暂无策略使用实时行情。</p>
           )}
         </>
       ) : (
@@ -474,7 +462,7 @@ export default function ChannelsPage() {
   if (!ov) {
     return (
       <section>
-        <h2>通道<HelpLink slug="channels" /></h2>
+        <h2>行情与交易<HelpLink slug="channels" /></h2>
         <p className="placeholder">加载中…</p>
         {err && <p className="badge badge-down">{err}</p>}
       </section>
@@ -482,39 +470,41 @@ export default function ChannelsPage() {
   }
 
   const brokerOptions = ov.channels.filter((c) => c.kind === 'broker' && c.status !== 'disabled')
-  // 带 enable_flag 的通道（如 easytrader）：启用/禁用都走服务端确认文本校验
+  // 带 enable_flag 的软件（如同花顺下单）：开启/关闭都要输入风险确认
   const gateRows = ov.channels.filter((c) => !!c.enable_flag)
+  const brokerName = (name: string) =>
+    name === 'paper' ? '内置模拟盘' : (brokerOptions.find((c) => c.name === name)?.label ?? name)
 
   return (
     <section>
-      <h2>通道<HelpLink slug="channels" /></h2>
+      <h2>行情与交易<HelpLink slug="channels" /></h2>
 
       <div className="card">
         <div className="row-btns">
           <button className="mini" onClick={refresh}>
-            刷新全景
+            刷新
           </button>
           <span className="sub-note">
-            历史链 {ov.history_chain.join(' → ') || '（无）'} · 财务链{' '}
-            {ov.financial_chain.join(' → ') || '（无）'} · 实时优先级{' '}
-            {ov.realtime_chain.join('、') || '（无）'} · 当前实时源{' '}
+            历史 K 线 {ov.history_chain.join(' → ') || '（无）'} · 财务{' '}
+            {ov.financial_chain.join(' → ') || '（无）'} · 实时{' '}
+            {ov.realtime_chain.join('、') || '（无）'} · 当前使用{' '}
             <b>{ov.realtime_active || '（无）'}</b>
           </span>
         </div>
         <p className="sub-note">
-          路由优先级在「设置」页修改（服务端按注册表校验通道名）；这里显示的是当前生效配置与实际装配结果。
+          使用哪个软件的数据可在「设置」页调整；这里显示当前实际使用情况。
         </p>
         {err && <p className="badge badge-down">{err}</p>}
         {msg && <p className="badge badge-paper">{msg}</p>}
         <table>
           <thead>
             <tr>
-              <th>通道</th>
-              <th>类型</th>
+              <th>软件 / 来源</th>
+              <th>用途</th>
               <th>状态</th>
-              <th>能力</th>
+              <th>提供内容</th>
               <th>连接</th>
-              <th>接口性质</th>
+              <th>软件性质</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -527,35 +517,35 @@ export default function ChannelsPage() {
       </div>
 
       <div className="card">
-        <h3>交易通道路由</h3>
+        <h3>下单账户</h3>
         <p>
           当前模式：
           <b className={ov.simulation_only ? 'badge badge-paper' : 'badge badge-live'}>
-            {ov.simulation_only ? '模拟盘（一律走内置模拟撮合）' : '实盘模式'}
+            {ov.simulation_only ? '模拟盘（由内置模拟撮合完成）' : '实盘模式'}
           </b>
-          {' '}通道 {ov.broker_channel}
-          {ov.live_connected ? ' · 实盘通道已连接' : ''}
+          {' '}账户 {brokerName(ov.broker_channel)}
+          {ov.live_connected ? ' · 实盘账户已连接' : ''}
         </p>
-        {ov.live_error && <p className="dialog-red">实盘通道：{ov.live_error}</p>}
+        {ov.live_error && <p className="dialog-red">实盘账户：{ov.live_error}</p>}
         <label>
-          交易通道（仅列出 API 可见通道 + 内置模拟撮合）
-          <select value={ov.broker_channel} onChange={(e) => patch({ broker_channel: e.target.value }, '通道已保存')}>
+          下单使用的账户
+          <select value={ov.broker_channel} onChange={(e) => patch({ broker_channel: e.target.value }, '券商账户已保存')}>
             {brokerOptions.map((c) => (
               <option key={c.name} value={c.name}>
                 {c.label}
-                {c.official ? '' : ' · 非官方接口，稳定性低'}
+                {c.official ? '' : ' · 非官方软件，稳定性低'}
               </option>
             ))}
           </select>
         </label>
         <label className="confirm-line">
-          确认文本（服务端强制校验，非 paper / 关模拟盘 / 启用非官方通道时必填）
+          风险确认（切换到实盘、使用非官方软件时需要）
           <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} />
         </label>
         <div className="row-btns">
           {ov.simulation_only ? (
             <button className="danger-btn" onClick={() => patch({ simulation_only: false }, '已切换到实盘模式')}>
-              关闭模拟盘（切实盘）
+              关闭模拟盘（切换到实盘）
             </button>
           ) : (
             <button onClick={() => patch({ simulation_only: true }, '已切回模拟盘模式')}>切回模拟盘模式</button>
@@ -564,34 +554,33 @@ export default function ChannelsPage() {
         {gateRows.map((c) => (
           <div className="row-btns" key={c.name}>
             <span className="sub-note">
-              {c.label}：{c.status === 'disabled' ? '未启用（不在交易 API 视野）' : '已启用'}
-              {c.official ? '' : ' · 非官方接口，稳定性低'}
+              {c.label}：{c.status === 'disabled' ? '未开启' : '已开启'}
+              {c.official ? '' : ' · 非官方软件，稳定性低'}
             </span>
             {c.status === 'disabled' ? (
               <button
                 className="danger-btn"
-                onClick={() => patch({ [c.enable_flag]: true } as Partial<AppSettings>, `已启用 ${c.label}`)}
+                onClick={() => patch({ [c.enable_flag]: true } as Partial<AppSettings>, `已开启 ${c.label}`)}
               >
-                启用
+                开启
               </button>
             ) : (
               <button
                 className="mini"
-                onClick={() => patch({ [c.enable_flag]: false } as Partial<AppSettings>, `已禁用 ${c.label}`)}
+                onClick={() => patch({ [c.enable_flag]: false } as Partial<AppSettings>, `已关闭 ${c.label}`)}
               >
-                禁用
+                关闭
               </button>
             )}
           </div>
         ))}
         <p className="placeholder">
-          输入确认文本「{RISK_CONFIRM_TEXT}」后提交；未带确认文本时服务端返回 400，原因在上方原样显示。
-          前端不做任何风险判定。
+          输入确认文本「{RISK_CONFIRM_TEXT}」后才能提交；未输入不会生效。
         </p>
       </div>
 
       <VaultSection spec={ov.credentials_spec} />
-      <ReconcileSection />
+      <ReconcileSection labelOf={brokerName} />
       <RealtimeSection />
     </section>
   )

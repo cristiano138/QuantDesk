@@ -81,7 +81,7 @@ def _hide_sdks(monkeypatch, *names: str) -> None:
 # --------------------------------------------------------------------------
 def test_class_metadata_matches_channel_card():
     assert TdxAiDataFeed.name == "tdx_aidata"
-    assert TdxAiDataFeed.label == "通达信（官方 SDK / pytdx）"
+    assert TdxAiDataFeed.label == "通达信行情（官方数据组件 / 免费开源版）"
     assert TdxAiDataFeed.requires == ("TdxAiData", "pytdx")
     assert set(TdxAiDataFeed.capabilities) == {FeedCapability.HISTORY_BAR,
                                                FeedCapability.REALTIME_TICK,
@@ -90,7 +90,7 @@ def test_class_metadata_matches_channel_card():
 
 def test_registry_describes_channel_without_importing_sdk():
     row = next(r for r in describe_adapters() if r["name"] == "tdx_aidata")
-    assert row["kind"] == "data" and row["label"] == "通达信（官方 SDK / pytdx）"
+    assert row["kind"] == "data" and row["label"] == "通达信行情（官方数据组件 / 免费开源版）"
     assert "history_bar" in row["capabilities"] and "transaction" in row["capabilities"]
     assert set(row["requires"]) == {"TdxAiData", "pytdx"}
     # requires 的「全部存在」语义 vs 本通道的「二者择一」实况：面板必须能看到缺哪个

@@ -654,7 +654,7 @@ def test_first_load_seeds_even_when_closed(db, monkeypatch):
     svc.set_pool(["600000.SH"])
     first = svc.refresh_auto()
     assert first["polled"] is True and len(first["rows"]) == 1
-    assert "快照" in first["reason"]
+    assert "行情" in first["reason"]
     second = svc.refresh_auto()
     assert second["polled"] is False and tx.calls == 1      # 只打了一次
     assert len(second["rows"]) == 1                          # 但列表照样有数
@@ -683,7 +683,7 @@ def test_partial_cache_still_seeds_the_rest_of_the_pool(db, monkeypatch):
     calls = tx.calls
     again = svc.refresh_auto()                        # 全都齐了 → 闭嘴
     assert again["polled"] is False and tx.calls == calls
-    assert "未外呼" in again["reason"]
+    assert "未取最新" in again["reason"]
 
     # 补不上来的标的（代码错/停牌无数据）不能变成"每次进页面都撞一次接口"：
     # 冷却是按服务算的，一次成功种过之后，短期内新增缺失标的只报原因不再外呼

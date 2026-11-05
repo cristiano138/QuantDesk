@@ -94,9 +94,9 @@ class TencentQuoteFeed(DataFeedAdapter):
     """腾讯公开行情：批量五档快照 + K 线（A股 / 港股）。"""
 
     name = _NAME
-    label = "腾讯财经公开行情（A股/港股，只读，非官方接口）"
-    prereq = ("无需账号与权限：本机可出站访问 qt.gtimg.cn / web.ifzq.gtimg.cn 即可。"
-              "这是腾讯行情页所用的公开接口，无文档无 SLA，字段变更需同步改本文件的两张下标表。")
+    label = "腾讯行情（A股/港股，只读，非官方软件）"
+    prereq = ("无需账号与权限，联网即可使用。这是腾讯行情页所用的公开数据，"
+              "字段可能随对方调整而变化。")
     official = False                     # 公开网页接口，非交易所官方授权 → UI 红字标注
     requires: tuple[str, ...] = ()       # httpx 已是主依赖，不是可选 SDK
     default_enabled = True

@@ -35,8 +35,8 @@ _TOKEN_GUIDE = (
 
 class TushareFeed(DataFeedAdapter):
     name = "tushare"
-    label = "Tushare Pro"
-    prereq = "注册 tushare.pro 取 token → 设置页或 .env 写入 QUANTDESK_TUSHARE_TOKEN（积分档决定限速）"
+    label = "Tushare 专业行情（付费）"
+    prereq = "注册 Tushare 账号并取得 token → 在设置页填写（积分等级决定取数频率）"
     requires = ("tushare",)
     capabilities = frozenset({FeedCapability.HISTORY_BAR, FeedCapability.FINANCIAL})
 

@@ -42,7 +42,7 @@ export default function CompliancePage() {
         <div className="alert-banner">
           <p>
             <b>清单读取失败：</b>
-            {loadErr}（连不上后端时这里不会显示成「没有清单项」）
+            {loadErr}（读取失败时这里不会显示成「没有清单项」）
           </p>
           <p>
             <button className="mini" onClick={() => setRetry((v) => v + 1)}>

@@ -406,9 +406,9 @@ class EasytraderBroker(BrokerAdapter):
     """easytrader（同花顺独立下单程序）通道：GUI 自动化 + 轮询回报。"""
 
     name = "easytrader"
-    label = "easytrader（同花顺客户端 GUI 自动化）"
-    prereq = ("需本机安装并登录同花顺「独立下单程序」(xiadan.exe)、锁定客户端版本（升级即可能失效），"
-              "启用需在设置页输入确认文本置 enable_easytrader=True；非官方接口，稳定性低，操作期间勿动鼠标键盘")
+    label = "easytrader（同花顺下单程序自动操作）"
+    prereq = ("本机安装并登录同花顺「独立下单程序」、锁定下单程序版本（升级后可能失效），"
+              "启用需在设置页输入确认文本；非官方软件，稳定性低，操作期间不要使用鼠标键盘")
     official = False
     default_enabled = False
     enable_flag = "enable_easytrader"

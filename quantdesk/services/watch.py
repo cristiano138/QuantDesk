@@ -443,10 +443,10 @@ class WatchService:
             rows = self.refresh(syms)
             return {"rows": rows, "polled": True, "sessions": sessions,
                     "reason": "" if (force or live_now)
-                    else f"池内 {len(missing)} 只还没有快照：补取一次，此后休市不再外呼"}
+                    else f"池内 {len(missing)} 只还没有行情：补取一次，此后休市不再自动更新"}
         with self._lock:
             cached = [self._live[s] for s in syms if s in self._live]
-        reason = "两个市场均休市，返回当日最后一次快照（未外呼）"
+        reason = "两个市场均休市，显示当日最后一次行情（未取最新数据）"
         if missing and left > 0:
             reason += f"；池内有 {len(missing)} 只无快照，{left:.0f}s 内不重复补取"
         return {"rows": cached, "polled": False, "sessions": sessions, "reason": reason}
@@ -561,15 +561,15 @@ class WatchService:
             res.flow_source = "official_outer_inner"
             # 港股的内外盘只有东财一个源（腾讯港股接口不给这两个字段），
             # 口径必须说清楚是单源，不能借 A股那句"两源实测一致"给自己抬精度
-            res.caveat = ("买卖量主口径=官方外盘/内盘（A股两源实测逐位一致：腾讯 outer 与东财 f49）"
+            res.caveat = ("买卖量以官方外盘/内盘为准（A股的腾讯与东方财富两家数据一致）"
                           if not sym.endswith(".HK") else
-                          "买卖量主口径=外盘/内盘（港股取东财 f49 单源：腾讯港股接口不给内外盘）")
+                          "买卖量以官方外盘/内盘为准（港股只有东方财富提供这两个数据）")
         else:
             res.flow_source = "quote_only"
             res.caveat = "本标的暂未取到官方内外盘，买卖量仅由逐笔聚合，含盘后差异"
 
         if em is None:
-            res.caveat += "；东财逐笔通道未就绪，无明细分层"
+            res.caveat += "；逐笔明细暂不可用，无分档数据"
             res.updated_at = now_ms()
             return res
 
@@ -577,7 +577,7 @@ class WatchService:
             df = self._transactions(sym, 5000, force=force)
         except QuantDeskError as e:
             self.stats["errors"] += 1
-            res.caveat += f"；逐笔获取失败（{type(e).__name__}），本轮只报官方量"
+            res.caveat += "；逐笔获取失败，本轮只报官方量"
             res.updated_at = now_ms()
             log.info("逐笔获取失败 %s: %s", sym, e)
             return self._finalize(res, df_empty=True)
@@ -607,7 +607,7 @@ class WatchService:
             res.outer_pct = round(res.tick_buy_volume / tick_total * 100, 2)
             res.flow_source = "em_tick"
             if not calibrated:
-                res.caveat += "；方向码未与官方对齐，买卖分层按默认约定（2=买/1=卖）给出"
+                res.caveat += "；买卖方向暂未与官方数据核对一致，分层按默认约定给出"
         return self._finalize(res, df_empty=False)
 
     def _finalize(self, res: FlowResult, *, df_empty: bool) -> FlowResult:

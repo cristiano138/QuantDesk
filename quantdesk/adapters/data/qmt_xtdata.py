@@ -225,9 +225,9 @@ class QmtXtdataFeed(DataFeedAdapter):
     """xtquant.xtdata 行情通道：历史 K + 实时 tick/分钟线（财务能力不提供）。"""
 
     name = "qmt_xtdata"
-    label = "miniQMT 行情（xtquant，主力源）"
-    prereq = "券商开通 QMT/miniQMT 权限 → 本机登录 miniQMT 客户端（极简模式）→ " \
-             "设置页录入 userdata 路径；xtquant 由券商 whl 安装"
+    label = "miniQMT 行情（券商官方，主力来源）"
+    prereq = "券商开通 QMT/miniQMT 权限 → 本机登录 miniQMT 极简模式 → " \
+             "设置页填写行情数据目录"
     official = True
     requires = ("xtquant",)
     default_enabled = True

@@ -619,10 +619,10 @@ class TdxAiDataFeed(DataFeedAdapter):
     """
 
     name = "tdx_aidata"
-    label = "通达信（官方 SDK / pytdx）"
-    prereq = ("二者择一：① pip install pytdx（社区开源，免账号，直连通达信行情服务器，"
-              "非官方协议实现）；② 安装通达信官方 AI 数据 SDK（模块名 TdxAiData，需申请权限）。"
-              "官方 SDK 优先，缺失自动降级 pytdx")
+    label = "通达信行情（官方数据组件 / 免费开源版）"
+    prereq = ("二者择一：① 使用免费开源的通达信行情组件（免账号，直连通达信行情服务器，"
+              "非官方实现）；② 安装通达信官方数据组件（需申请权限）。"
+              "官方优先，缺省自动改用免费版")
     requires = ("TdxAiData", "pytdx")
     requires_any = True
     official = True          # 存在官方路径；用 pytdx 时传输层口径由 describe()["transport_official"] 如实上报

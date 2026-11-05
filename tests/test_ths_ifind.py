@@ -77,7 +77,7 @@ def test_adapter_metadata_matches_channel_contract():
     assert m.ThsIFindFeed.label == "同花顺 iFinD（付费）"
     assert m.ThsIFindFeed.requires == ("iFinDPy",)
     assert m.ThsIFindFeed.official is True
-    assert "iFinDPy" in m.ThsIFindFeed.prereq and "whl" in m.ThsIFindFeed.prereq
+    assert "同花顺" in m.ThsIFindFeed.prereq and "设置页" in m.ThsIFindFeed.prereq
     assert m.ThsIFindFeed.capabilities == frozenset(
         {FeedCapability.HISTORY_BAR, FeedCapability.FINANCIAL,
          FeedCapability.REALTIME_TICK, FeedCapability.TRANSACTION})

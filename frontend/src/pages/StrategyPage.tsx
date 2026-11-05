@@ -17,7 +17,7 @@ import {
 } from '../api/client'
 import HelpLink from '../components/HelpLink'
 
-const NEW_TEMPLATE = `"""我的策略：只依赖 BaseStrategy/ctx，禁止 import 任何适配器（宪法第 6 条）。"""
+const NEW_TEMPLATE = `"""我的策略：一个最简单的示例——没有持仓时买入固定数量。"""
 
 from quantdesk.engine.strategy_base import BaseStrategy
 
@@ -37,6 +37,14 @@ class MyStrategy(BaseStrategy):
 `
 
 const FREQS = ['1d', '1m', '5m', '15m', '30m', '60m']
+const FREQ_CN: Record<string, string> = {
+  '1d': '日线',
+  '1m': '1 分钟',
+  '5m': '5 分钟',
+  '15m': '15 分钟',
+  '30m': '30 分钟',
+  '60m': '60 分钟',
+}
 const LEVELS = ['', 'DEBUG', 'INFO', 'WARNING', 'ERROR']
 const PAGE_SIZE = 100
 
@@ -74,21 +82,21 @@ function StartDialog({
         <label>
           运行模式
           <select value={mode} onChange={(e) => setMode(e.target.value as 'paper' | 'live')}>
-            <option value="paper">模拟盘（paper）</option>
-            <option value="live">实盘（live，需通过生命周期门禁）</option>
+            <option value="paper">模拟盘</option>
+            <option value="live">实盘（需先通过风控检查）</option>
           </select>
         </label>
         <label>
-          实时聚合周期（freq）
+          实时 K 线周期
           <select value={freq} onChange={(e) => setFreq(e.target.value)}>
             {FREQS.map((f) => (
               <option key={f} value={f}>
-                {f === '1d' ? '1d（日线）' : `${f}（分钟线）`}
+                {FREQ_CN[f] ?? f}
               </option>
             ))}
           </select>
         </label>
-        <p className="sub-note">freq 决定实时 tick 在泵内聚合成 bar 的周期；日线策略保持 1d。</p>
+        <p className="sub-note">决定实时行情按什么周期合成为 K 线；做日线策略保持日线即可。</p>
         <div className="dialog-actions">
           <button className="danger" onClick={onClose} disabled={busy}>
             取消
@@ -374,7 +382,7 @@ export default function StrategyPage() {
       const id = selected.replace(/\.py$/, '').split('/').pop() || 'strategy'
       const r = await startStrategy(id, mode, {}, freq)
       setRunningId(r.strategy_id || id)
-      setMsg(`启动：${r.status}（模式 ${mode}，周期 ${freq}）`)
+      setMsg(`已启动（${mode === 'paper' ? '模拟盘' : '实盘'}，${FREQ_CN[freq] ?? freq}周期）`)
     } catch (e) {
       setMsg(apiError(e)) // 门禁 403 / 参数 400 原样回显
     } finally {

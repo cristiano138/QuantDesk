@@ -4,137 +4,30 @@ import {
   apiError,
   getDataInventory,
   getDataTask,
-  getAdaptersHealth,
-  getLogFiles,
-  getSettings,
   startDataDownload,
-  type AdaptersHealth,
-  type AppSettings,
   type DataTask,
   type Inventory,
-  type LogFileInfo,
 } from '../api/client'
 import HelpLink from '../components/HelpLink'
-
-function StatusDot({ ok }: { ok: boolean }) {
-  return <span className={ok ? 'lamp lamp-paper' : 'lamp lamp-down'} />
-}
-
-const STATUS_CN: Record<string, string> = {
-  ready: '就绪',
-  unready: '未就绪',
-  disabled: '已禁用',
-}
-
-/** 运维面板（D28）：适配器健康灯 + 日志清单。挂在数据管理页下方。 */
-function OpsPanel() {
-  const [health, setHealth] = useState<AdaptersHealth | null>(null)
-  const [logs, setLogs] = useState<LogFileInfo[]>([])
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    const load = () => {
-      getAdaptersHealth().then(setHealth).catch((e: unknown) => setErr(apiError(e)))
-      getLogFiles().then(setLogs).catch(() => setLogs([]))
-    }
-    load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
-  }, [])
-
-  if (err) return <p className="badge badge-down">{err}</p>
-  if (!health) return <p className="placeholder">加载中…</p>
-
-  // 服务端只给一列 channels（含 kind），这里按数据源/交易通道并排展示，行数取两者较多的一边
-  const feeds = (health.channels ?? []).filter((c) => c.kind === 'data')
-  const brokers = (health.channels ?? []).filter((c) => c.kind === 'broker')
-  const rows = Array.from({ length: Math.max(feeds.length, brokers.length) }, (_, i) => ({
-    feed: feeds[i],
-    broker: brokers[i],
-  }))
-
-  return (
-    <div className="card">
-      <h3>适配器健康面板</h3>
-      <p className="placeholder" style={{ marginBottom: 8 }}>
-        状态灯 = 注册表扫描结果（依赖缺失/未接入的适配器显示灰红）；探活不外呼、不耗数据源配额。
-      </p>
-      <table>
-        <thead>
-          <tr><th>数据源</th><th>状态</th><th>交易通道</th><th>状态</th></tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.feed?.name ?? 'none'}-${r.broker?.name ?? i}`}>
-              <td>{r.feed ? r.feed.label : ''}</td>
-              <td>
-                {r.feed && (
-                  <>
-                    <StatusDot ok={r.feed.status === 'ready'} />
-                    {STATUS_CN[r.feed.status] ?? r.feed.status}
-                    {r.feed.missing.length > 0 && (
-                      <span className="sub-note">（缺 {r.feed.missing.join('、')}）</span>
-                    )}
-                  </>
-                )}
-              </td>
-              <td>{r.broker ? r.broker.label : ''}</td>
-              <td>
-                {r.broker && (
-                  <>
-                    <StatusDot ok={r.broker.status === 'ready'} />
-                    {STATUS_CN[r.broker.status] ?? r.broker.status}
-                    {r.broker.official === false && (
-                      <span className="dialog-red">非官方接口，稳定性低</span>
-                    )}
-                  </>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="badge" style={{ marginTop: 8 }}>
-        通道：{health.broker_channel}｜模式：{health.simulation_only ? '模拟盘' : '实盘'}
-        ｜限速：AKShare {health.limits.akshare_min_interval}s / Tushare {health.limits.tushare_min_interval}s
-      </p>
-      <h4>历史日志（data/logs）</h4>
-      {logs.length === 0 ? (
-        <p className="placeholder">暂无日志文件。</p>
-      ) : (
-        <table>
-          <thead>
-            <tr><th>文件</th><th>类型</th><th>大小</th><th>时间</th></tr>
-          </thead>
-          <tbody>
-            {logs.slice(0, 10).map((l) => (
-              <tr key={l.file}>
-                <td>{l.file}</td>
-                <td>{l.kind}</td>
-                <td>{(l.size / 1024).toFixed(1)} KB</td>
-                <td>{new Date(l.mtime).toLocaleString('zh-CN')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  )
-}
 
 const FREQS = ['1d', '1w', '1M', '1m', '5m']
 const ADJUSTS = ['none', 'qfq', 'hfq']
 const FREQ_CN: Record<string, string> = {
-  '1d': '1d 日线',
-  '1w': '1w 周线',
-  '1M': '1M 月线',
-  '1m': '1m 分钟线',
-  '5m': '5m 分钟线',
+  '1d': '日线',
+  '1w': '周线',
+  '1M': '月线',
+  '1m': '1 分钟',
+  '5m': '5 分钟',
+  '15m': '15 分钟',
+  '30m': '30 分钟',
+  '60m': '60 分钟',
 }
 const ADJUST_CN: Record<string, string> = {
-  none: 'none 不复权（下单/看盘口径）',
-  qfq: 'qfq 前复权（回测与指标口径）',
-  hfq: 'hfq 后复权',
+  none: '不复权（下单与看盘口径）',
+  forward: '前复权（回测与指标口径）',
+  backward: '后复权',
+  qfq: '前复权（回测与指标口径）',
+  hfq: '后复权',
 }
 
 const TERMINAL = new Set(['done', 'error'])
@@ -197,7 +90,7 @@ function DownloadPanel() {
       setTaskId(r.task_id)
       setHint(`任务已提交（${list.length} 只标的），正在排队…`)
     } catch (e) {
-      setErr(apiError(e)) // 后端给的限流/依赖缺失原因原样上屏
+      setErr(apiError(e)) // 限流/缺少行情软件的原因原样上屏，不吞掉
     } finally {
       setStarting(false)
     }
@@ -212,10 +105,10 @@ function DownloadPanel() {
 
   return (
     <div className="card">
-      <h3>历史数据下载（界面提交任务）</h3>
+      <h3>历史 K 线下载</h3>
       <p className="sub-note">
-        下载走服务端限速与降级路由（AKShare/Tushare 等按设置页优先级），已入库标的是增量补、不覆盖已有行。
-        下载完的数据写在本地 Parquet，回测与行情面板读的就是它。
+        下载会自动控制速度并在多个行情来源之间切换，已经下载过的日期只补缺、不覆盖。
+        下载完成后保存在本机，回测与行情面板直接使用。
       </p>
 
       <div className="form-grid">
@@ -294,11 +187,11 @@ function DownloadPanel() {
           </table>
           {finished && (
             <p className="badge badge-paper" style={{ marginTop: 8 }}>
-              已写入本地 Parquet：data/parquet/（按 市场/代码/周期/年份 分文件），共 {totalRows} 行。
+              已保存到本机，共 {totalRows} 行。
               现在可以去
               <Link to="/backtest" style={{ color: '#1d4ed8', margin: '0 4px' }}>回测报告</Link>
-              跑策略；行情面板
-              <Link to="/market" style={{ color: '#1d4ed8', margin: '0 4px' }}>/market</Link>
+              跑策略；在
+              <Link to="/market" style={{ color: '#1d4ed8', margin: '0 4px' }}>行情面板</Link>
               也能看到这段 K 线。
             </p>
           )}
@@ -308,7 +201,7 @@ function DownloadPanel() {
       {failEntries.length > 0 && (
         <div className="result-block">
           <h4 style={{ margin: '0 0 6px' }} className="dialog-red">
-            失败 {failEntries.length} 只（原因按服务端原文逐条列出，没有被吞掉）
+            失败 {failEntries.length} 只（原因逐条列出）
           </h4>
           <ul className="warn" style={{ fontSize: 13, lineHeight: 1.8, margin: 0, paddingLeft: 20 }}>
             {failEntries.map(([sym, why]) => (
@@ -318,47 +211,21 @@ function DownloadPanel() {
             ))}
           </ul>
           <p className="sub-note">
-            限流类原因（等待/冷却）隔几分钟重下同一批即可；「依赖缺失」类原因要到
-            <Link to="/channels" style={{ color: '#1d4ed8', margin: '0 4px' }}>通道</Link>
-            页把对应数据源装好并配凭据。
+            限流类原因（等待/冷却）隔几分钟重下同一批即可；需要先安装行情软件的，到
+            <Link to="/channels" style={{ color: '#1d4ed8', margin: '0 4px' }}>行情与交易</Link>
+            页按提示安装并登录。
           </p>
         </div>
       )}
 
       {finished && failEntries.length === 0 && okEntries.length === 0 && (
-        <p className="sub-note warn">任务结束但没有写入记录：后端返回的 ok 列表为空，请重试或改用下方命令行。</p>
+        <p className="sub-note warn">任务结束但没有写入记录，请稍后重试。</p>
       )}
     </div>
   )
 }
 
-/** 命令行入口保留：脚本仍然有效，且是不依赖界面的兜底路径。 */
-function CliPanel({ initialSymbol, initialStart }: { initialSymbol: string; initialStart: string }) {
-  const [symbol, setSymbol] = useState(initialSymbol)
-  const [start, setStart] = useState(initialStart)
-  const [msg, setMsg] = useState('')
-
-  return (
-    <div className="card">
-      <h3>命令行（等价）</h3>
-      <p className="placeholder">
-        批量下载命令行（限速熔断保护，已入库标的增量零配额）：
-        <br />
-        <code>uv run python scripts/download_history.py --symbols {symbol || '600000.SH'} --start {start || '2019-01-01'}</code>
-      </p>
-      <div className="watch-add">
-        <input value={symbol} onChange={(e) => setSymbol(e.target.value)} placeholder="600000.SH,000001.SZ" />
-        <input value={start} onChange={(e) => setStart(e.target.value)} style={{ maxWidth: 130 }} />
-        <button onClick={() => setMsg('命令已生成：复制上面那行到终端执行（在项目根目录 F:\\量化交易 下运行）')}>
-          生成命令
-        </button>
-      </div>
-      {msg && <p className="badge">{msg}</p>}
-    </div>
-  )
-}
-
-/** 本地数据清单：库里到底有什么、覆盖到哪天、哪段是"有 K 线但没成交额"的降级数据。 */
+/** 本地数据清单：已下载了哪些标的、覆盖到哪天、哪段是"有 K 线但没成交额"的数据。 */
 function InventoryPanel() {
   const [inv, setInv] = useState<Inventory | null>(null)
   const [err, setErr] = useState('')
@@ -390,7 +257,7 @@ function InventoryPanel() {
   return (
     <div className="card">
       <div className="row-btns">
-        <h3>本地数据清单（回测与行情面板读的就是这些）</h3>
+        <h3>已下载的历史 K 线（回测与行情面板使用的就是这些）</h3>
         <button disabled={busy} onClick={() => void load()}>
           {busy ? '扫描中…' : '重新扫描'}
         </button>
@@ -404,16 +271,16 @@ function InventoryPanel() {
       {inv && (
         <>
           <p className="sub-note">
-            目录 {inv.root} ｜ {inv.symbols} 个标的 · {inv.entries} 条（标的×周期×复权） · {inv.rows} 行
-            {inv.bad_files > 0 ? ` · ${inv.bad_files} 个文件读不出来（已排除在统计外）` : ''}
+            {inv.symbols} 个标的 · {inv.entries} 条（标的×周期×复权） · {inv.rows} 行
+            {inv.bad_files > 0 ? ` · ${inv.bad_files} 条数据读取异常（已排除在统计外）` : ''}
           </p>
           {noAmount.length > 0 && (
             <p className="warn">
               {noAmount.length} 条数据的成交额 ≥50% 为 0（例如 {noAmount[0].symbol} {noAmount[0].freq}{' '}
-              {noAmount[0].adjust}：{noAmount[0].amount_zero_pct}%）。这类行通常是公开免费源的降级数据
-              （腾讯日线不返回成交额）——量、额相关的回测指标在这种数据上不可信，
-              换 akshare/tushare 重下这一段（
-              <Link to="/manual?s=data" style={{ color: '#1d4ed8' }}>怎么说？</Link>）
+              {noAmount[0].adjust}：{noAmount[0].amount_zero_pct}%）。这类数据来自不提供成交额的行情来源
+              （如腾讯日线）——涉及量、额的回测指标在这类数据上不可信，
+              请改用能提供成交额的行情来源重新下载这一段（
+              <Link to="/manual?s=data" style={{ color: '#1d4ed8' }}>怎么处理？</Link>）
             </p>
           )}
           <input
@@ -425,7 +292,7 @@ function InventoryPanel() {
           {items.length === 0 ? (
             <p className="placeholder">
               {inv.items.length === 0
-                ? '本地库是空的：还没有任何标的被下载进来。回测与行情面板此时都会报「本地无数据」。'
+                ? '还没有下载任何标的。回测与行情面板此时会提示「本地无数据」。'
                 : '没有匹配这个过滤词的条目。'}
             </p>
           ) : (
@@ -439,8 +306,8 @@ function InventoryPanel() {
                 {items.map((it) => (
                   <tr key={`${it.symbol}-${it.freq}-${it.adjust}`}>
                     <td>{it.symbol}</td>
-                    <td>{it.freq}</td>
-                    <td>{it.adjust}</td>
+                    <td>{FREQ_CN[it.freq] ?? it.freq}</td>
+                    <td>{ADJUST_CN[it.adjust] ?? it.adjust}</td>
                     <td>{it.rows.toLocaleString('zh-CN')}</td>
                     <td>{it.start} ~ {it.end}</td>
                     <td className={it.amount_zero_pct > 50 ? 'dialog-red' : ''}>
@@ -453,35 +320,22 @@ function InventoryPanel() {
           )}
         </>
       )}
-      {!inv && !err && <p className="placeholder">正在扫描本地库…</p>}
+      {!inv && !err && <p className="placeholder">正在读取已下载数据…</p>}
     </div>
   )
 }
 
 export default function DataPage() {
-  const [settings, setSettings] = useState<AppSettings | null>(null)
-  const [settingsErr, setSettingsErr] = useState('')
-
-  useEffect(() => {
-    getSettings().then(setSettings).catch((e: unknown) => setSettingsErr(apiError(e)))
-  }, [])
-
   return (
     <section>
       <h2>数据管理<HelpLink slug="data" /></h2>
       <DownloadPanel />
       <InventoryPanel />
-      <CliPanel initialSymbol="600000.SH" initialStart="2019-01-01" />
-      {settings && (
-        <p className="badge">
-          限速：AKShare {settings.akshare_min_interval}s / Tushare {settings.tushare_min_interval}s
-          （
-          <Link to="/settings" style={{ color: '#1d4ed8' }}>设置页</Link>
-          可调）
-        </p>
-      )}
-      {settingsErr && <p className="badge badge-down">设置读取失败：{settingsErr}</p>}
-      <OpsPanel />
+      <p className="badge">
+        下载间隔与行情来源优先级可在
+        <Link to="/settings" style={{ color: '#1d4ed8', margin: '0 4px' }}>设置页</Link>
+        调整
+      </p>
     </section>
   )
 }

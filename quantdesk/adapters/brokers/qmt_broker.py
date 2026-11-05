@@ -224,9 +224,9 @@ class QmtBroker(BrokerAdapter):
     """QMT/miniQMT 实盘通道：xtquant.xttrader 同步下单 + 回报入队 + 断线自愈。"""
 
     name = "qmt"
-    label = "QMT / miniQMT 实盘（xtquant，主力通道）"
-    prereq = "券商开通 QMT 实盘权限 → 本机登录 miniQMT（极简模式）→ 设置页凭据保险库录入 " \
-             "qmt.userdata_path 与 qmt.account_id → 全局模拟盘开关切 OFF（默认 ON 时不会走到这里）"
+    label = "QMT / miniQMT 实盘（券商官方，主力通道）"
+    prereq = "券商开通 QMT 实盘权限 → 本机登录 miniQMT 极简模式 → 设置页填写行情数据目录与资金账号 " \
+             "→ 关闭模拟盘开关（默认开启时不会走到这里）"
     official = True
     is_paper = False
     requires = ("xtquant",)

@@ -484,14 +484,14 @@ export default function BacktestPage() {
                 <div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} />
               </div>
               <p className="sub-note">
-                {prog.done != null && prog.total ? `已处理 ${prog.done}/${prog.total} 根 bar · ` : ''}
+                {prog.done != null && prog.total ? `已处理 ${prog.done}/${prog.total} 根 K 线 · ` : ''}
                 {percent.toFixed(1)}%
                 {prog.message ? ` · ${prog.message}` : ''}
               </p>
               {cancelMsg && <p className="sub-note warn">{cancelMsg}</p>}
               {prog.status === 'failed' && (
                 <p className="badge badge-down">
-                  状态 failed：{prog.error || '后端未返回错误详情，请查看运行记录备注'}
+                  运行失败：{prog.error || '没有更多错误信息，请查看运行记录备注'}
                 </p>
               )}
               {prog.status === 'cancelled' && (
@@ -502,7 +502,7 @@ export default function BacktestPage() {
               )}
               {prog.status === 'interrupted' && (
                 <p className="sub-note">
-                  已中断：这条运行由之前的服务进程发起，进程重启后执行体已不存在，如实标记而非永远挂着「运行中」。
+                  已中断：这次运行由上一次程序启动时发起，程序重启后未能继续，如实标记而不是一直显示「运行中」。
                 </p>
               )}
             </div>
@@ -523,8 +523,8 @@ export default function BacktestPage() {
               <div className="card">
                 <div className="row-btns">
                   <h3>
-                    净值曲线（run #{detail.run_id} · {detail.strategy} · {detail.symbol}
-                    {detail.bars ? ` · ${detail.bars} 根 bar` : ''}）
+                    净值曲线（第 {detail.run_id} 次运行 · {detail.strategy} · {detail.symbol}
+                    {detail.bars ? ` · ${detail.bars} 根 K 线` : ''}）
                   </h3>
                   <span className="badge">{RUN_STATUS_CN[detail.status] ?? detail.status}</span>
                 </div>
@@ -575,8 +575,8 @@ export default function BacktestPage() {
                 ) : (
                   <p className="placeholder">
                     {detail.detail_source === 'none'
-                      ? '这次运行没有可回看的明细：它早于「明细落库」上线（改造前的运行只把成交放在进程内存里）。'
-                        + '新跑的回测成交/委托/日志都会分块落库，服务重启后照样能翻。'
+                      ? '这次运行没有可回看的明细：它早于「回测明细保存」功能上线，当时只保留了汇总结果。'
+                        + '现在新跑的回测会把成交、委托和过程日志都保存下来，程序重启后照样能回看。'
                       : detail.remark
                         // 有备注就不在这儿猜原因：猜一次就多一套事实（空跑那次的真因写在备注里）
                         ? '这次运行没有成交，原因见上方备注。'

@@ -110,7 +110,7 @@ class GmBroker(BrokerAdapter):
 
     name = "gm"
     label = "掘金量化终端"
-    prereq = "掘金终端安装并登录 + 绑定券商（或仿真账户）+ 从掘金官网安装 SDK"
+    prereq = "安装并登录掘金终端 + 绑定券商（或仿真账户）"
     official = True
     is_paper = False
     requires = ("gm",)

@@ -102,8 +102,8 @@ class MarketDataService:
         if not row or row.get("last") is None:
             return {"symbol": symbol, "last": None, "bids": [], "asks": [],
                     "source": "none",
-                    "reason": ("当前休市中且本机没有该标的的快照缓存（自动路径不外呼）；"
-                               "实时盯盘页点「立即刷新」可强制取一次最新盘口")}
+                    "reason": ("当前休市中，本机还没有该标的的行情快照（休市期间不自动取数）；"
+                               "在实时盯盘页点「立即刷新」可强制取一次最新盘口")}
         ts = row.get("ts_ms") or row.get("fetched_at") or 0
         return {"symbol": row.get("symbol", symbol),
                 "dt": pd.Timestamp(int(ts), unit="ms").isoformat() if ts else None,

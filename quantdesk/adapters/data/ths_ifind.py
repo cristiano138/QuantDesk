@@ -486,9 +486,8 @@ class ThsIFindFeed(DataFeedAdapter):
 
     name = "ths_ifind"
     label = "同花顺 iFinD（付费）"
-    prereq = ("商务开通试用/正式账号 → 安装同花顺提供的 iFinDPy 私有 whl"
-              "（uv pip install <路径>，不改 pyproject）→ 设置页保险库录入 "
-              "ifind.username/ifind.password 或 ifind.refresh_token；受 IP 绑定，换机需重新授权")
+    prereq = ("开通同花顺 iFinD 账号 → 安装同花顺提供的行情组件 → 在设置页填写账号密码或授权 token；"
+              "账号与设备绑定，换电脑需重新授权")
     requires = (SDK_MODULE,)
     official = True
     capabilities = frozenset({FeedCapability.HISTORY_BAR, FeedCapability.FINANCIAL,

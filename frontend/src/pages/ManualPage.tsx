@@ -116,7 +116,7 @@ function SectionNav({
         </div>
       ))}
       <p className="sub-note">
-        正文由后端 /api/manual 提供；页面找不到某个板块时，点上方搜索框搜关键词更省事。
+        正文来自内置使用手册；找不到某个板块时，点上方搜索框搜关键词更省事。
       </p>
     </div>
   )
@@ -150,7 +150,7 @@ function SearchPanel({
           <input
             value={rawQ}
             onChange={(e) => onInput(e.target.value)}
-            placeholder="例如：立即刷新、内外盘、涨停 656.70、待确认、非官方接口"
+            placeholder="例如：立即刷新、内外盘、涨停 656.70、待确认、非官方软件"
           />
         </label>
         <button className="mini" onClick={onClear} disabled={rawQ === ''}>
@@ -221,7 +221,7 @@ function DocView({
             重试
           </button>
           <span className="sub-note">
-            正文来自后端 /api/manual；后端起来后即可恢复，本页不会用空内容顶替。
+            正文来自内置使用手册；连上系统后即可恢复，本页不会用空内容顶替。
           </span>
         </p>
       </div>
@@ -545,7 +545,7 @@ export default function ManualPage() {
         <h2>使用手册</h2>
         <div className="alert-banner">
           <p>
-            <b>手册内容来自后端 /api/manual，当前连不上</b>——请确认后端已启动（双击 启动.bat）。
+            <b>手册内容当前读取不到</b>——请确认软件已正常启动（双击 启动.bat）。
           </p>
           <p>失败原文：{sectionsErr}</p>
           <p>
@@ -563,7 +563,7 @@ export default function ManualPage() {
     return (
       <section>
         <h2>使用手册</h2>
-        <p className="placeholder">正在加载手册目录（一次请求，之后切板块不再请求目录）…</p>
+        <p className="placeholder">正在加载手册目录…</p>
       </section>
     )
   }
@@ -573,7 +573,7 @@ export default function ManualPage() {
       <section>
         <h2>使用手册</h2>
         <p className="placeholder">
-          后端 /api/manual/sections 返回了空目录：手册内容还没入库，不是本页加载失败。
+          手册目录为空：手册内容还没有准备好，不是本页加载失败。
           <button className="mini" style={{ marginLeft: 8 }} onClick={() => { setSections(null); setSectionsRetry((v) => v + 1) }}>
             重新取一次
           </button>
@@ -587,7 +587,7 @@ export default function ManualPage() {
       <h2>使用手册</h2>
       <p className="sub-note" style={{ marginBottom: 12 }}>
         每个板块一篇：用之前要准备什么、一步步点哪里、界面上的数字怎么读、看到某句提示该怎么办。
-        不熟悉的板块先读对应这一篇再动手；正文由后端提供，与界面口径同源。
+        不熟悉的板块先读对应这一篇再动手；正文与界面口径同源。
       </p>
 
       <div className="manual-layout">

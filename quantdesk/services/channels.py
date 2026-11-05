@@ -51,7 +51,7 @@ _FEED_RETRY_COOLDOWN_S = 60.0     # 行情通道同上：冷却期内不外呼�
 # 行情通道的凭据（交易通道见 _CREDENTIALS）：feed 的 connect() 无参，凭据由适配器
 # 自己经 core.secrets.resolve() 取，这里只登记「UI 该问用户要什么」。
 _FEED_CREDENTIALS: dict[str, list[tuple[str, str, bool, str]]] = {
-    "tushare": [("tushare.token", "token", True, "Tushare Pro 注册后获得的接口 token")],
+    "tushare": [("tushare.token", "token", True, "Tushare 账号注册后获得的 token")],
     "ths_ifind": [("ifind.username", "username", False, "iFinD 账号（试用/正式）"),
                   ("ifind.password", "password", False, "iFinD 密码"),
                   ("ifind.refresh_token", "refresh_token", False,

@@ -70,7 +70,7 @@ function AlertBanner() {
     <div className="alert-banner">
       {downList.length > 0 && (
         <p>
-          <b>通道断连：</b>
+          <b>交易软件断连：</b>
           {downList.map(([ch, why]) => (
             <span key={ch} className="alert-chip">
               {ch}｜{why}
@@ -88,7 +88,7 @@ function AlertBanner() {
           ))}
           <span className="sub-note">
             最近对象 {diffs[0]?.ref ?? '—'}（去
-            <Link to="/channels" style={{ color: '#1d4ed8', margin: '0 4px' }}>通道页对账区块</Link>
+            <Link to="/channels" style={{ color: '#1d4ed8', margin: '0 4px' }}>「行情与交易」页的持仓与资金核对</Link>
             逐条写结论并标「已处置」，标完红条就不统计它了）
           </span>
         </p>
@@ -197,13 +197,11 @@ function PaneState({
   error,
   emptyText,
   onRetry,
-  apiNote,
 }: {
   loading: boolean
   error: string
   emptyText: string
   onRetry: () => void
-  apiNote: string
 }) {
   if (loading && !error) return <p className="placeholder">正在读取…</p>
   if (error)
@@ -218,7 +216,7 @@ function PaneState({
             重试
           </button>
           <span className="sub-note">
-            （{apiNote}；连不上后端时不会显示成「{emptyText}」）
+            （连不上系统时不会显示成「{emptyText}」）
           </span>
         </p>
       </div>
@@ -267,13 +265,13 @@ export default function MonitorPage() {
     } catch (e) {
       setActionErr(
         `撤单请求失败（委托 ${orderId}）：${apiError(e)}` +
-          '——委托是否已撤以服务端回报为准，列表会在下一轮刷新里更新。',
+          '——委托是否已撤以券商回报为准，列表会在下一轮刷新里更新。',
       )
     }
   }
 
   const liveMode = health ? !health.simulation_only : false
-  const channelLabel = liveMode ? '实盘通道' : '模拟撮合'
+  const channelLabel = liveMode ? '实盘账户' : '模拟盘'
 
   return (
     <section>
@@ -312,10 +310,10 @@ export default function MonitorPage() {
           </span>
         </div>
         <div className="card metric-card">
-          <span className="metric-label">通道状态</span>
+          <span className="metric-label">交易状态</span>
           <span className="metric-value">
             <span className={health ? (liveMode ? 'lamp lamp-live' : 'lamp lamp-paper') : 'lamp lamp-down'} />
-            {health ? channelLabel : '后端离线'}
+            {health ? channelLabel : '系统未连接'}
           </span>
         </div>
       </div>
@@ -355,7 +353,6 @@ export default function MonitorPage() {
             error={positions.error}
             emptyText="当前无持仓。"
             onRetry={positions.retry}
-            apiNote="持仓来自 /api/trading/positions"
           />
         )}
       </div>
@@ -399,9 +396,8 @@ export default function MonitorPage() {
           <PaneState
             loading={orders.loading}
             error={orders.error}
-            emptyText="当前无委托。下单经服务端三道闸（模拟盘开关 → 规则校验 → 二次确认）。"
+            emptyText="当前无委托。下单会依次确认：模拟盘开关、交易规则、二次确认。"
             onRetry={orders.retry}
-            apiNote="委托来自 /api/trading/orders"
           />
         )}
       </div>
@@ -437,7 +433,6 @@ export default function MonitorPage() {
             error={trades.error}
             emptyText="当前无成交。"
             onRetry={trades.retry}
-            apiNote="成交来自 /api/trading/trades"
           />
         )}
       </div>

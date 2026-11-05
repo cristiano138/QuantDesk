@@ -4,63 +4,44 @@ import HelpLink from '../components/HelpLink'
 
 const RISK_CONFIRM_TEXT = '我知晓并承担实盘交易风险'
 
-/** 数值型可编辑字段（含新增热参与韧性参数）。 */
+/** 数值型可编辑字段。 */
 const NUM_FIELDS: { key: keyof AppSettings; label: string; hint?: string }[] = [
   { key: 'commission_rate', label: '佣金率（如 0.00025）' },
   { key: 'min_commission', label: '最低佣金（元）' },
   { key: 'stamp_tax_sell', label: '印花税率（卖出）' },
   { key: 'transfer_fee', label: '过户费率（双边）' },
-  { key: 'akshare_min_interval', label: 'AKShare 最小间隔（秒）' },
-  { key: 'tushare_min_interval', label: 'Tushare 最小间隔（秒）' },
-  { key: 'max_position_value', label: '单票市值上限（元）', hint: 'RiskGate 每单动态读取' },
+  { key: 'akshare_min_interval', label: '免费行情取数间隔（秒）', hint: '间隔太小容易被行情来源限制' },
+  { key: 'tushare_min_interval', label: '付费行情取数间隔（秒）', hint: '间隔太小容易被行情来源限制' },
+  { key: 'max_position_value', label: '单票市值上限（元）', hint: '每次下单前自动检查' },
   { key: 'max_daily_orders', label: '日委托数上限（单）', hint: '正整数' },
-  { key: 'watchdog_interval_s', label: '通道探活间隔（秒）', hint: '断线重连与探活节奏' },
-  { key: 'reconcile_interval_s', label: '对账间隔（秒）', hint: '实盘全量核对周期' },
-  { key: 'log_retention_days', label: '运行噪音保留期（天）',
-    hint: '只清运行日志与对账「本轮无差异」心跳；差异、委托成交持仓、回测明细一律不自动删' },
+  { key: 'watchdog_interval_s', label: '连接检查间隔（秒）', hint: '交易软件断线后的检查与重连节奏' },
+  { key: 'reconcile_interval_s', label: '持仓对账间隔（秒）', hint: '实盘账户与本地记录核对周期' },
+  { key: 'log_retention_days', label: '运行记录保留期（天）',
+    hint: '只清理运行记录与「本轮无差异」记录；委托、成交、持仓、回测明细不会自动删除' },
 ]
 
 const STR_FIELDS: { key: keyof AppSettings; label: string; hint?: string }[] = [
-  { key: 'tdx_install_dir', label: '通达信安装目录（T0002 所在）', hint: '板块导出「写入客户端目录」需要' },
-  { key: 'ths_install_dir', label: '同花顺安装目录', hint: '预留；easytrader 凭据另见通道页保险库' },
+  { key: 'tdx_install_dir', label: '通达信安装目录（T0002 所在）', hint: '把板块写入通达信时需要' },
+  { key: 'ths_install_dir', label: '同花顺安装目录', hint: '同花顺下单程序所在目录' },
 ]
 
-/** 通道路由优先级：改这里就等于改「与哪个软件结合」，服务端按注册表校验名字。 */
+/** 行情来源顺序：决定优先用哪个软件的数据。 */
 const ROUTE_FIELDS: { key: keyof AppSettings; label: string; hint?: string }[] = [
-  { key: 'feed_priority_history', label: '历史K线优先级', hint: '逗号分隔注册名，按顺序降级；未装 SDK 的源可以先写上' },
-  { key: 'feed_priority_realtime', label: '实时主源（取第一个可用者）', hint: '断线不换源（宁停勿错），这里只决定谁是主源' },
-  { key: 'feed_priority_financial', label: '财务数据优先级', hint: '逗号分隔，按顺序降级' },
+  { key: 'feed_priority_history', label: '历史 K 线来源顺序', hint: '按顺序取用，前一个不可用再用下一个；未安装的软件也可以先写上' },
+  { key: 'feed_priority_realtime', label: '实时行情主来源', hint: '只使用第一个可用的来源；断线时不切换，避免价格口径混用' },
+  { key: 'feed_priority_financial', label: '财务数据来源顺序', hint: '按顺序取用' },
 ]
 
-/** 影响清单：切实盘前明示（D19）。 */
+/** 影响清单：切实盘前明示。 */
 function ImpactList() {
   return (
     <ul className="impact-list">
-      <li>新订单不再路由内置模拟撮合，改为真实券商通道（须已配置并在线）</li>
-      <li>实盘下单强制服务端二次确认：每单弹窗 10 秒内人工确认，超时作废</li>
-      <li>通道断线一律 fail-closed 拒单（不排队、不重试）</li>
+      <li>新订单改为发送到真实券商账户（须已登录并连接）</li>
+      <li>每笔实盘下单都要在弹窗中人工确认，10 秒内未确认自动作废</li>
+      <li>交易软件断线时直接拒绝下单（不排队、不重试）</li>
       <li>全部委托继续受 A 股规则校验（T+1 / 整手 / 涨跌停价 / 仓位 / 资金）</li>
       <li>程序化交易须已完成报备（见「报备清单」页）</li>
     </ul>
-  )
-}
-
-/** 后端静态托管提示：桌面壳与浏览器直连都走 8787，前端产物由后端伺服。 */
-function HostingHint() {
-  const port = window.location.port
-  const served = port === '8787'
-  return (
-    <div className="card">
-      <h3>运行形态</h3>
-      <p className="sub-note">
-        {served
-          ? '当前由后端静态托管前端产物（同源 127.0.0.1:8787，SPA 路由 /channels、/interop 可直连访问）。'
-          : `当前端口 ${port || '80'} 非后端端口：应是 Vite 开发/预览模式，API 与事件流经代理转发到 127.0.0.1:8787。`}
-      </p>
-      <p className="sub-note">
-        后端只绑 127.0.0.1，全部数据本地存储；绑定地址不提供配置项。
-      </p>
-    </div>
   )
 }
 
@@ -135,12 +116,12 @@ export default function SettingsPage() {
 
   const wantLive = !s.simulation_only
   const brokers = (ov?.channels ?? []).filter((c) => c.kind === 'broker' && c.status !== 'disabled')
+  const brokerName = (name: string) =>
+    name === 'paper' ? '内置模拟盘' : (brokers.find((b) => b.name === name)?.label ?? name)
 
   return (
     <section>
       <h2>设置<HelpLink slug="settings" /></h2>
-
-      <HostingHint />
 
       <div className="card">
         <h3>交易模式</h3>
@@ -149,7 +130,7 @@ export default function SettingsPage() {
           <b className={wantLive ? 'badge badge-live' : 'badge badge-paper'}>
             {wantLive ? '实盘模式（真实资金）' : '模拟盘模式'}
           </b>
-          {' '}通道 {s.broker_channel}
+          {' '}账户 {brokerName(s.broker_channel)}
           {ov?.live_error ? <span className="dialog-red">（{ov.live_error}）</span> : null}
         </p>
         {!wantLive ? (
@@ -167,7 +148,7 @@ export default function SettingsPage() {
               切换到实盘模式
             </button>
             <p className="sub-note">
-              未输入确认文本时服务端返回 400，原因显示在下方；是否放行由服务端判定。
+              未输入确认文本不会生效。
             </p>
           </>
         ) : (
@@ -178,50 +159,50 @@ export default function SettingsPage() {
       </div>
 
       <div className="card">
-        <h3>交易通道</h3>
+        <h3>券商账户</h3>
         <label>
-          通道（只列交易 API 可见的通道 + 内置模拟撮合）
-          <select value={s.broker_channel} onChange={(e) => save({ broker_channel: e.target.value }, '通道已保存')}>
-            {!brokers.some((b) => b.name === 'paper') && <option value="paper">paper（内置模拟撮合）</option>}
-            {brokers.length === 0 && <option value={s.broker_channel}>{s.broker_channel}</option>}
+          下单使用的账户
+          <select value={s.broker_channel} onChange={(e) => save({ broker_channel: e.target.value }, '券商账户已保存')}>
+            {!brokers.some((b) => b.name === 'paper') && <option value="paper">内置模拟盘（模拟撮合）</option>}
+            {brokers.length === 0 && <option value={s.broker_channel}>{brokerName(s.broker_channel)}</option>}
             {brokers.map((b) => (
               <option key={b.name} value={b.name}>
                 {b.label}
-                {b.official ? '' : '（非官方接口，稳定性低）'}
+                {b.official ? '' : '（非官方软件，稳定性低）'}
               </option>
             ))}
           </select>
         </label>
         {s.broker_channel !== 'paper' && (
-          <p className="sub-note">选择非 paper 通道同样需服务端确认文本，可在上方输入后提交。</p>
+          <p className="sub-note">改用券商账户同样需要在上方输入确认文本。</p>
         )}
         {s.broker_channel === 'easytrader' && (
-          <p className="dialog-red">非官方接口，稳定性低；默认禁用，操作期间勿动鼠标键盘。</p>
+          <p className="dialog-red">非官方软件，稳定性低；默认关闭，操作期间勿动鼠标键盘。</p>
         )}
         {s.broker_channel !== 'paper' && !wantLive && (
-          <p className="placeholder">当前为模拟盘模式：任何下单仍路由内置模拟撮合。</p>
+          <p className="placeholder">当前为模拟盘模式：任何下单仍由内置模拟撮合完成。</p>
         )}
       </div>
 
       <div className="card">
-        <h3>非官方通道启用位</h3>
+        <h3>同花顺客户端下单（非官方）</h3>
         <p className="sub-note">
-          easytrader 默认禁用（红字标注：非官方接口，稳定性低）。打开需确认文本，服务端强制校验。
+          默认关闭。开启后通过同花顺下单程序发送委托，客户端升级后可能失效；操作期间不要移动鼠标键盘。
         </p>
         {s.enable_easytrader ? (
-          <button onClick={() => save({ enable_easytrader: false }, '已禁用 easytrader')}>
-            禁用 easytrader 通道
+          <button onClick={() => save({ enable_easytrader: false }, '已关闭同花顺客户端下单')}>
+            关闭同花顺客户端下单
           </button>
         ) : (
-          <button className="danger-btn" onClick={() => save({ enable_easytrader: true }, '已启用 easytrader')}>
-            启用 easytrader（非官方）
+          <button className="danger-btn" onClick={() => save({ enable_easytrader: true }, '已开启同花顺客户端下单')}>
+            开启同花顺客户端下单（非官方）
           </button>
         )}
       </div>
 
       <div className="card">
-        <h3>费率与限速参数</h3>
-        <p className="sub-note">限速为数据源反爬保护；费率以券商实际为准。</p>
+        <h3>费率与刷新间隔</h3>
+        <p className="sub-note">刷新间隔用于避免请求过密；费率以券商实际收取为准。</p>
         {NUM_FIELDS.map((f) => (
           <label key={f.key}>
             {f.label}
@@ -252,19 +233,19 @@ export default function SettingsPage() {
 
       <div className="card">
         <h3>回测执行方式</h3>
-        <p className="sub-note">开启后回测入队后台执行并在回测页显示进度；关闭则同步等待结果。</p>
+        <p className="sub-note">开启后回测在后台运行并在回测页显示进度；关闭则等待结果。</p>
         <label className="confirm-line">
-          异步回测（backtest_async）
+          后台执行回测
           <input type="checkbox" checked={s.backtest_async} onChange={(e) => save({ backtest_async: e.target.checked }, '回测执行方式已保存')} />
         </label>
       </div>
 
       <div className="card">
-        <h3>行情通道路由优先级</h3>
+        <h3>行情来源顺序</h3>
         <p className="sub-note">
-          当前生效：历史链 {ov?.history_chain.join(' → ') || '（无可用源）'} ·
-          财务链 {ov?.financial_chain.join(' → ') || '（无）'} ·
-          实时主源 {ov?.realtime_active || ov?.realtime_chain.join('、') || '（无）'}
+          当前使用：历史 K 线 {ov?.history_chain.join(' → ') || '（暂无可用来源）'} ·
+          财务 {ov?.financial_chain.join(' → ') || '（无）'} ·
+          实时 {ov?.realtime_active || ov?.realtime_chain.join('、') || '（无）'}
         </p>
         {ROUTE_FIELDS.map((f) => (
           <label key={f.key}>
@@ -278,9 +259,8 @@ export default function SettingsPage() {
           </label>
         ))}
         <p className="sub-note">
-          名字必须是注册表里真实存在的行情通道（写错服务端返回 400 并列出可选值）；
-          就绪状态与安装引导见「通道」页。实时链只决定谁是主源——主源断线时不切换到第二源，
-          避免两条口径拼出一条失真的时间轴。
+          填写「行情与交易」页里显示的来源名称（如 免费公开行情、腾讯行情、miniQMT 行情）。未安装的软件可以先填，安装后自动生效；
+          实时行情只使用第一个可用来源，避免不同来源的价格混在一起。
         </p>
       </div>
 

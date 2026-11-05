@@ -9,11 +9,11 @@ export const api = axios.create({ baseURL: '/api', timeout: 5000 })
  * 只认这几个精确串：服务端作者给的中文 detail 一律原样回显，不做改写。
  */
 const BOILERPLATE_CN: Record<string, string> = {
-  'Not Found': '接口不存在（后端还没有这个接口或路径写错）',
-  'Method Not Allowed': '请求方式不被该接口接受',
-  'Internal Server Error': '后端处理出错（详情见后端日志）',
-  'Bad Gateway': '网关无响应',
-  'Service Unavailable': '后端服务未就绪',
+  'Not Found': '没有找到该功能',
+  'Method Not Allowed': '当前操作方式不支持',
+  'Internal Server Error': '系统处理出错（详情见运行日志）',
+  'Bad Gateway': '网络无响应',
+  'Service Unavailable': '系统尚未就绪',
   'Unauthorized': '未授权',
   'Forbidden': '没有权限',
 }
@@ -31,17 +31,17 @@ export function apiError(e: unknown): string {
     const status = e.response?.status
     const detail = (e.response?.data as { detail?: unknown } | undefined)?.detail
     const mapped = (s: string): string =>
-      BOILERPLATE_CN[s] ? `${BOILERPLATE_CN[s]}（HTTP ${status ?? '—'}）` : s
+      BOILERPLATE_CN[s] ? `${BOILERPLATE_CN[s]}（错误码 ${status ?? '—'}）` : s
     if (typeof detail === 'string' && detail) return mapped(detail)
     if (detail !== undefined && detail !== null) return JSON.stringify(detail)
     if (typeof e.response?.data === 'string' && e.response.data) return mapped(e.response.data)
     if (!e.response) {
-      // 请求没拿到响应：后端未启动、端口不通、或被超时掐断
+      // 请求没拿到响应：软件未启动、连接不通、或被超时掐断
       if (e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT' || /timeout/i.test(e.message))
-        return '连不上后端（请求超时）——请确认后端已启动，或点右上角重试'
-      return '连不上后端（请确认后端已启动，或点右上角重试）'
+        return '连不上系统（请求超时）——请确认软件已启动，或点右上角重试'
+      return '连不上系统（请确认软件已启动，或点右上角重试）'
     }
-    return `请求失败（HTTP ${status}）——后端未给出原因`
+    return `请求失败（错误码 ${status}）——没有给出原因`
   }
   return e instanceof Error ? e.message : String(e)
 }

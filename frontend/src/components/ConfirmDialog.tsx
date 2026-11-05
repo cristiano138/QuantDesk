@@ -42,7 +42,7 @@ export default function ConfirmDialog({ request, ttlSeconds = 10, onDone }: Prop
     <div className="dialog-mask">
       <div className="card dialog confirm-dialog">
         <h3>实盘下单二次确认</h3>
-        <p className="dialog-red">非模拟通道：真实资金委托，请逐单核对！</p>
+        <p className="dialog-red">实盘账户：真实资金委托，请逐单核对！</p>
         <table>
           <tbody>
             <tr>

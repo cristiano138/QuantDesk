@@ -24,7 +24,7 @@ const NAV = [
   { to: '/strategy', label: '策略工作台' },
   { to: '/backtest', label: '回测报告' },
   { to: '/monitor', label: '实盘监控' },
-  { to: '/channels', label: '通道' },
+  { to: '/channels', label: '行情与交易' },
   { to: '/interop', label: '软件互操作' },
   { to: '/data', label: '数据管理' },
   { to: '/guide', label: '新手指引' },
@@ -64,7 +64,7 @@ function HealthBadge() {
           重试
         </button>
         <span className="badge badge-down" style={{ marginLeft: 8 }}>
-          后端离线
+          系统未连接
         </span>
       </>
     )
@@ -111,7 +111,7 @@ export default function App() {
         setGateErr('')
       } catch (e) {
         setGateErr(
-          `「${decision === 'confirm' ? '确认' : '拒绝'}」指令没送达服务端（委托 ${orderId}）：${apiError(e)}` +
+          `「${decision === 'confirm' ? '确认' : '拒绝'}」指令没送达系统（委托 ${orderId}）：${apiError(e)}` +
             '——该单仍未生效，可在「实盘监控」页核对状态；10 秒内未确认的待确认单会自动作废。',
         )
       }
