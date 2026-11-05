@@ -34,8 +34,10 @@ import {
   openEvents,
   refreshWatch,
   removeWatchPool,
+  searchWatchSymbols,
   type FlowHistoryRow,
   type KlineRow,
+  type SymbolSearchRow,
   type TickPage,
   type WatchDetail,
   type WatchFlow,
@@ -50,8 +52,9 @@ import HelpLink from '../components/HelpLink'
 echarts.use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent,
   AxisPointerComponent, CanvasRenderer])
 
-/** 列表轮询间隔可选值（ms），默认 5s。 */
-const INTERVALS = [3000, 5000, 10000, 30000]
+/** 列表轮询间隔可选值（ms）。极速 1 秒＝公开行情源可稳定供数的最快节拍
+ *  （上游快照本身就是秒级，再快只会被对方限流，拿到的是同一份数据）。 */
+const INTERVALS = [1000, 3000, 5000, 10000, 30000]
 const DETAIL_MS = 18000   // 详情（外呼单标的：快照+逐笔+分时）
 const TICKS_MS = 20000    // 逐笔明细分页（每次重取全量逐笔，别打太密）
 const KLINE_MS = 60000    // K 线：历史日线盘中变化慢，60s 足够
@@ -295,11 +298,12 @@ function IntradayChart({
 
 // ---------------- K 线（lightweight-charts：蜡烛 + 成交量副图，同 MarketPage 用法） ----------------
 
-function KLineChart({ rows }: { rows: KlineRow[] }) {
+function KLineChart({ rows, unit }: { rows: KlineRow[]; unit: string }) {
   const ref = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const [hover, setHover] = useState<{ time: string; o: number; h: number; l: number; c: number; v: number } | null>(null)
 
   useEffect(() => {
     if (!ref.current) return
@@ -321,6 +325,21 @@ function KLineChart({ rows }: { rows: KlineRow[] }) {
       priceFormat: { type: 'volume' }, priceScaleId: 'vol',
     })
     chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } })
+    // 十字光标读数：指到哪根就把那根的日期与开高低收量读出来（鼠标/触屏都可用）
+    chart.subscribeCrosshairMove((param) => {
+      const candle = param.seriesData.get(candleRef.current as ISeriesApi<'Candlestick'>) as
+        | { open: number; high: number; low: number; close: number }
+        | undefined
+      const vol = param.seriesData.get(volRef.current as ISeriesApi<'Histogram'>) as
+        | { value: number }
+        | undefined
+      if (!candle || param.time == null) { setHover(null); return }
+      setHover({
+        time: String(param.time),
+        o: candle.open, h: candle.high, l: candle.low, c: candle.close,
+        v: vol?.value ?? 0,
+      })
+    })
     const onResize = () => chart.applyOptions({ width: ref.current?.clientWidth ?? 600 })
     window.addEventListener('resize', onResize)
     onResize()
@@ -350,7 +369,28 @@ function KLineChart({ rows }: { rows: KlineRow[] }) {
     chartRef.current?.timeScale().fitContent()
   }, [rows])
 
-  return <div ref={ref} style={{ width: '100%' }} />
+  const last = rows[rows.length - 1]
+  const shown = hover ?? (last
+    ? { time: last.dt.slice(0, 10), o: last.open, h: last.high, l: last.low, c: last.close, v: last.volume }
+    : null)
+  return (
+    <div>
+      {shown && (
+        <div className="row-btns" style={{ marginBottom: 6, flexWrap: 'wrap', gap: 10 }}>
+          <b className="mono">{shown.time}</b>
+          <span>开 <b>{fmtNum(shown.o, 2)}</b></span>
+          <span>高 <b className="up">{fmtNum(shown.h, 2)}</b></span>
+          <span>低 <b className="down">{fmtNum(shown.l, 2)}</b></span>
+          <span>收 <b className={shown.c >= shown.o ? 'up' : 'down'}>{fmtNum(shown.c, 2)}</b></span>
+          <span>量 <b>{fmtQty(shown.v, unit)}</b></span>
+        </div>
+      )}
+      <div ref={ref} style={{ width: '100%' }} />
+      <p className="sub-note" style={{ margin: '4px 0 0' }}>
+        鼠标滚轮/双指捏合缩放，拖动平移；十字光标（或点住任意一根）读出当日开高低收与成交量。
+      </p>
+    </div>
+  )
 }
 
 // ---------------- 五档盘口（卖上买下，量条按该档最大量归一化） ----------------
@@ -562,8 +602,12 @@ export default function WatchPage() {
   const [klineReload, setKlineReload] = useState(0)
   const [hist, setHist] = useState<FlowHistoryRow[]>([])
   const [auto, setAuto] = useState(true)
-  const [intervalMs, setIntervalMs] = useState(5000)
+  const [intervalMs, setIntervalMs] = useState(1000)
   const [input, setInput] = useState('')
+  const [pickQuery, setPickQuery] = useState('')
+  const [pickRows, setPickRows] = useState<SymbolSearchRow[]>([])
+  const [pickBusy, setPickBusy] = useState(false)
+  const [pickErr, setPickErr] = useState('')
   const [poolMsg, setPoolMsg] = useState('')
   const [busy, setBusy] = useState(false)
   const [idleNote, setIdleNote] = useState('')
@@ -788,6 +832,42 @@ export default function WatchPage() {
     }
   }
 
+  /** 选股器：输入名称/拼音/代码（防抖 300ms），点结果直接进盯盘池并选中。 */
+  useEffect(() => {
+    const q = pickQuery.trim()
+    if (!q) { setPickRows([]); setPickErr(''); return }
+    let alive = true
+    setPickBusy(true)
+    const t = setTimeout(() => {
+      searchWatchSymbols(q, 12)
+        .then((rows) => { if (alive) { setPickRows(rows); setPickErr('') } })
+        .catch((e: unknown) => { if (alive) { setPickRows([]); setPickErr(apiError(e)) } })
+        .finally(() => { if (alive) setPickBusy(false) })
+    }, 300)
+    return () => { alive = false; clearTimeout(t) }
+  }, [pickQuery])
+
+  const addFromPick = async (row: SymbolSearchRow) => {
+    setBusy(true)
+    setErr('pool', '')
+    try {
+      const r = await addWatchPool([row.symbol])
+      if ((r.errors ?? []).length) {
+        setErr('pool', `${row.symbol}：${r.errors[0].error}`)
+      } else {
+        setPoolMsg(`已加入 ${row.name || row.symbol}`)
+        setPickQuery('')
+        setPickRows([])
+        await loadList()
+        setSymbol(row.symbol)
+      }
+    } catch (e) {
+      setErr('pool', poolErrText(e))
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }
+
   /** 一键把「行情面板」的自选股带进盯盘池：两个列表本来讲的是同一批票，
    *  以前要用户重打一遍代码——这是"板块之间不知道怎么用"的真实来源之一。 */
   const importFromWatchlist = async () => {
@@ -930,7 +1010,9 @@ export default function WatchPage() {
           <label className="pick-item">
             间隔
             <select value={intervalMs} onChange={(e) => setIntervalMs(Number(e.target.value))}>
-              {INTERVALS.map((ms) => <option key={ms} value={ms}>{ms / 1000} 秒</option>)}
+              {INTERVALS.map((ms) => (
+                <option key={ms} value={ms}>{ms === 1000 ? '极速 1 秒' : `${ms / 1000} 秒`}</option>
+              ))}
             </select>
           </label>
           <button
@@ -958,9 +1040,9 @@ export default function WatchPage() {
           <h3>盯盘标的池</h3>
           <div className="watch-add" style={{ flex: 1, minWidth: 260 }}>
             <input
-              placeholder="代码逗号分隔批量添加，如 600000.SH,00700.HK（也支持 600519、hk00700）"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
+              placeholder="按名称/拼音/代码搜索选择，或输入代码批量添加（600000.SH,00700.HK）"
+              value={pickQuery || input}
+              onChange={(e) => { setPickQuery(e.target.value); setInput(e.target.value) }}
               onKeyDown={(e) => { if (e.key === 'Enter') void addPool() }}
             />
             <button disabled={busy} onClick={() => void addPool()}>添加</button>
@@ -973,12 +1055,38 @@ export default function WatchPage() {
             </button>
           </div>
         </div>
+        {(pickRows.length > 0 || pickBusy || pickErr) && (
+          <div className="watch-pick" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+            {pickBusy && <span className="sub-note">搜索中…</span>}
+            {pickErr && <span className="sub-note">搜索失败：{pickErr}</span>}
+            {pickRows.map((row) => (
+              <button
+                key={row.symbol}
+                className="pick-item mini"
+                style={{ justifyContent: 'space-between', textAlign: 'left' }}
+                disabled={busy}
+                onClick={() => void addFromPick(row)}
+              >
+                <b>{row.name || row.symbol}</b>
+                <span className="sub-note" style={{ margin: 0 }}>
+                  {row.symbol}{row.type ? ` · ${row.type}` : ''}　点击加入盯盘池
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         {poolMsg && <p className="sub-note">{poolMsg}</p>}
         {status?.pool && status.pool.length > 0 && (
           <div className="watch-pick">
-            {status.pool.map((s) => (
-              <button key={s} className="pick-item mini" onClick={() => setSymbol(s)}>{s}</button>
-            ))}
+            {status.pool.map((s) => {
+              const nm = rows.find((r) => r.symbol === s)?.name
+                || (detail?.symbol === s ? (snap.name as string) : '') || ''
+              return (
+                <button key={s} className="pick-item mini" title={s} onClick={() => setSymbol(s)}>
+                  {nm ? `${nm}·${s}` : s}
+                </button>
+              )
+            })}
           </div>
         )}
         {status && status.pool.length === 0 && (
@@ -1131,7 +1239,7 @@ export default function WatchPage() {
               </p>
             ) : (
               <>
-                <KLineChart rows={klineRows} />
+                <KLineChart rows={klineRows} unit={klineMeta?.unit || ''} />
                 <p className="sub-note">
                   来源 {feedCn(klineMeta?.source ?? '')} · 复权 {ADJUST_CN[klineMeta?.adjust ?? ''] ?? klineMeta?.adjust ?? '—'} ·
                   量单位 {klineMeta?.unit || '—'} · 共 {klineRows.length} 根（{klineRows[0]?.dt ?? '—'} ~ {klineRows[klineRows.length - 1]?.dt ?? '—'}）

@@ -1069,6 +1069,21 @@ export async function getWatchHistory(q: { symbol?: string; trade_date?: number;
   return r.data
 }
 
+/** 按名称/拼音首字母/代码搜股票（选股器；只留股票，指数/基金/窝轮已由后端剔除）。 */
+export interface SymbolSearchRow {
+  symbol: string
+  name: string
+  type: string
+}
+
+export async function searchWatchSymbols(q: string, limit = 12): Promise<SymbolSearchRow[]> {
+  const r = await api.get<{ rows: SymbolSearchRow[]; error: string }>('/watch/symbols', {
+    params: { q, limit },
+    timeout: 15000,
+  })
+  return r.data.rows
+}
+
 // ---------------- 新手指引（金融术语库）----------------
 
 export interface GuideCategory {
