@@ -17,3 +17,9 @@
 *.parquet binary
 *.db binary
 *.vault binary
+
+# 成品包与图标：任何机器上都不许做换行/编码转换（APK 被改一个字节就装不上）
+*.apk binary
+*.exe binary
+*.ico binary
+*.keystore binary
