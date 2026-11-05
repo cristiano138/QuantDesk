@@ -363,9 +363,7 @@ export default function InteropPage() {
                 />
                 <span>
                   {b.label}
-                  <span className="sub-note">
-                    {b.ext} · {b.encoding} · {b.format}
-                  </span>
+                  <span className="sub-note">{b.format}</span>
                 </span>
               </label>
             ))}
@@ -378,7 +376,7 @@ export default function InteropPage() {
                 checked={writeToClient && !!tdxDir}
                 onChange={(e) => setWriteToClient(e.target.checked)}
               />
-              <span>写入客户端目录（通达信 T0002\blocknew）</span>
+              <span>写入通达信客户端的自定义板块目录</span>
             </label>
             {!tdxDir && tdxErr && (
               <p className="sub-note warn">
@@ -391,11 +389,11 @@ export default function InteropPage() {
             )}
             {!tdxDir && !tdxErr && (
               <p className="sub-note warn">
-                未填写通达信安装目录，无法直接写入客户端：请到「设置 → 软件目录」填 tdx_install_dir 后重试。
+                未填写通达信安装目录，无法直接写入客户端：请到「设置」页填好通达信安装目录后重试。
               </p>
             )}
             <label>
-              北交所市场位（bse_prefix）
+              北交所市场位
               <input
                 value={bsePrefix}
                 onChange={(e) => setBsePrefix(e.target.value)}
@@ -454,7 +452,7 @@ export default function InteropPage() {
             {preview && (
               <>
                 <h4>
-                  内容预览（{preview.name} · {preview.encoding} · {preview.bytes} 字节）
+                  内容预览（{preview.name} · {preview.bytes} 字节）
                 </h4>
                 <pre className="logs">{preview.content}</pre>
               </>

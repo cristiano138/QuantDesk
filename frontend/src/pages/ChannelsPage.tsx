@@ -44,10 +44,15 @@ const FEED_CN: Record<string, string> = {
   tdx_aidata: '通达信行情',
   tx_quote: '腾讯行情',
   em_quote: '东方财富行情',
-  akshare: '免费公开数据',
+  akshare: '免费公开行情',
   tushare: 'Tushare 专业行情',
   ths_ifind: '同花顺 iFinD',
+  federated: '多来源自动切换',
   paper: '内置模拟盘',
+}
+
+function feedCn(name: string): string {
+  return FEED_CN[name] ?? name
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -95,11 +100,11 @@ function ChannelRow({ row, onChanged }: { row: ChannelInfo; onChanged: () => voi
           <span className={lampClass(row)} />
           {row.label}
         </td>
-        <td>{row.kind === 'data' ? '行情' : '交易'}</td>
-        <td>
+        <td className="nowrap">{row.kind === 'data' ? '行情' : '交易'}</td>
+        <td className="nowrap">
           {STATUS_TEXT[row.status] ?? row.status}
           {row.status === 'unready' && row.missing.length > 0 && (
-            <span className="sub-note">（需先安装并登录对应软件）</span>
+            <span className="sub-note">（安装并登录对应软件后自动可用）</span>
           )}
         </td>
         <td>
@@ -485,10 +490,10 @@ export default function ChannelsPage() {
             刷新
           </button>
           <span className="sub-note">
-            历史 K 线 {ov.history_chain.join(' → ') || '（无）'} · 财务{' '}
-            {ov.financial_chain.join(' → ') || '（无）'} · 实时{' '}
-            {ov.realtime_chain.join('、') || '（无）'} · 当前使用{' '}
-            <b>{ov.realtime_active || '（无）'}</b>
+            历史 K 线 {ov.history_chain.map(feedCn).join(' → ') || '（无）'} · 财务{' '}
+            {ov.financial_chain.map(feedCn).join(' → ') || '（无）'} · 实时{' '}
+            {ov.realtime_chain.map(feedCn).join('、') || '（无）'} · 当前使用{' '}
+            <b>{ov.realtime_active ? feedCn(ov.realtime_active) : '（无）'}</b>
           </span>
         </div>
         <p className="sub-note">

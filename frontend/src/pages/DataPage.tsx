@@ -276,8 +276,9 @@ function InventoryPanel() {
           </p>
           {noAmount.length > 0 && (
             <p className="warn">
-              {noAmount.length} 条数据的成交额 ≥50% 为 0（例如 {noAmount[0].symbol} {noAmount[0].freq}{' '}
-              {noAmount[0].adjust}：{noAmount[0].amount_zero_pct}%）。这类数据来自不提供成交额的行情来源
+              {noAmount.length} 条数据的成交额 ≥50% 为 0（例如 {noAmount[0].symbol} 的
+              {FREQ_CN[noAmount[0].freq] ?? noAmount[0].freq}·{ADJUST_CN[noAmount[0].adjust] ?? noAmount[0].adjust}：
+              {noAmount[0].amount_zero_pct}%）。这类数据来自不提供成交额的行情来源
               （如腾讯日线）——涉及量、额的回测指标在这类数据上不可信，
               请改用能提供成交额的行情来源重新下载这一段（
               <Link to="/manual?s=data" style={{ color: '#1d4ed8' }}>怎么处理？</Link>）

@@ -2,7 +2,7 @@
 
 Windows 本地 A 股量化交易工作台（Python 3.11+ · FastAPI · React + TypeScript）。
 
-核心体验：行情面板 → Monaco 策略工作台 → 回测 → 模拟盘 → 实盘（QMT 为主力通道），
+核心体验：实时盯盘 → 行情面板 → 回测 → 模拟盘 → 实盘（QMT 为主力通道），
 同一份策略代码零修改跑通三种模式；实盘下单必经服务端三道闸。
 与各大主流股票软件结合：QMT/miniQMT、通达信、同花顺（iFinD + 客户端）、掘金、AKShare、Tushare
 的**行情通道 + 交易通道 + 板块/公式工作流互操作**（详见下方[通道矩阵](#与主流股票软件结合通道矩阵)）。
@@ -96,7 +96,7 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 ## 页面使用手册（`/manual`）
 
 每个板块标题旁都有「怎么用？」入口，跳到应用内手册对应章节。手册正文**只存在后端一份**
-（`quantdesk/services/manual.py`，13 个板块：起始 / 盯盘 / 行情 / 策略 / 回测 / 监控 / 通道 /
+（`quantdesk/services/manual.py`，12 个板块：起始 / 盯盘 / 行情 / 回测 / 监控 / 通道 /
 互操作 / 数据 / 设置 / 合规 / 指引 / 排障），前端只传 slug——不会出现"页面改了、说明书还是旧的"
 两套事实。设置页每个可编辑项都必须在手册里被解释到（有测试锁住）。
 
@@ -194,7 +194,7 @@ cd frontend && pnpm build                 # 产出 frontend/dist（桌面壳与�
 ## 目录
 
 - `quantdesk/` 后端（core / adapters / engine / ipc / services / store / api）
-- `frontend/` React 前端（Vite + TS）：**实时盯盘** / 行情 / 策略工作台 / 回测 / 实盘监控 /
+- `frontend/` React 前端（Vite + TS）：**实时盯盘** / 行情 / 回测 / 实盘监控 /
   数据管理 / 合规报备 / 通道管理 / 软件互操作 / **新手指引** / **使用手册** / 设置
 - `desktop/` pywebview 桌面壳
 - `scripts/` 数据与运维脚本（含 `e2e_v1.py` 全链路验收、`dod_d27_align.py` 数据源审计、

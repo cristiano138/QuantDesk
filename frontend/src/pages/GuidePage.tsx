@@ -114,7 +114,7 @@ function CategoryNav({
   onSelect: (id: string) => void
 }) {
   return (
-    <div className="card strategy-tree">
+    <div className="card nav-list">
       <h3>分类</h3>
       <ul>
         <li>
@@ -173,8 +173,8 @@ function LearningPath({
           </button>
         ))}
       </div>
-      <p className="sub-note mono">
-        {items.map((t) => t.slug).join(' → ')}
+      <p className="sub-note">
+        {items.map((t) => t.term).join(' → ')}
       </p>
     </div>
   )
@@ -219,7 +219,7 @@ function TermList({
     )
   }
   return (
-    <div className="card strategy-tree">
+    <div className="card nav-list">
       <h3>术语列表（{rows.length} / {total}）</h3>
       <ul>
         {rows.map((t) => (

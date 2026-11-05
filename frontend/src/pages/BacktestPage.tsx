@@ -58,6 +58,17 @@ const RUN_STATUS_CN: Record<string, string> = {
   interrupted: '已中断',
 }
 
+const FREQ_CN: Record<string, string> = {
+  '1d': '日线',
+  '1w': '周线',
+  '1M': '月线',
+  '1m': '1 分钟',
+  '5m': '5 分钟',
+  '15m': '15 分钟',
+  '30m': '30 分钟',
+  '60m': '60 分钟',
+}
+
 /** 走到终点、不再轮询的状态。cancelling 不算——引擎还没停在 bar 边界。 */
 const TERMINAL = ['completed', 'failed', 'cancelled', 'interrupted']
 
@@ -181,7 +192,7 @@ function RunHistory({ onPick, activeId }: { onPick: (id: number) => void; active
                 <td>{r.run_id}</td>
                 <td>{r.strategy}</td>
                 <td className="mono">{r.symbol}</td>
-                <td>{r.freq}</td>
+                <td className="nowrap">{FREQ_CN[r.freq] ?? r.freq}</td>
                 <td>{r.start}~{r.end}</td>
                 <td>
                   <span className={`badge ${r.status === 'completed' ? 'badge-paper' : r.status === 'failed' ? 'badge-down' : ''}`}>
@@ -460,8 +471,7 @@ export default function BacktestPage() {
             {runningNow ? '回测排队/运行中…' : '运行回测'}
           </button>
           <p className="sub-note">
-            默认异步执行：提交后立即返回 run_id，进度来自事件流与轮询（二者取其先到的）。
-            可在「设置」中通过 backtest_async 改回同步。
+            默认在后台执行：提交后马上返回这次运行的编号，进度实时显示，随时可以取消。
           </p>
           {error && <p className="badge badge-down">{error}</p>}
           {pickMsg && <p className="sub-note">{pickMsg}</p>}

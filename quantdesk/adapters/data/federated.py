@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 
 class FederatedFeed(DataFeedAdapter):
     name = "federated"
+    label = "多来源自动切换"
 
     def __init__(self, history_feeds: list[DataFeedAdapter],
                  financial_feeds: list[DataFeedAdapter] | None = None,

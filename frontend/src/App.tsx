@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { api, apiError, getHealth, openEvents, type Health } from './api/client'
 import ConfirmDialog, { type ConfirmRequest } from './components/ConfirmDialog'
 import ChannelsPage from './pages/ChannelsPage'
@@ -9,9 +9,8 @@ import InteropPage from './pages/InteropPage'
 import MonitorPage from './pages/MonitorPage'
 import SettingsPage from './pages/SettingsPage'
 
-// 首屏不拉 Monaco 与图表库：这三页按需分包（宪法第 8 条栈纪律不变，只是切 chunk）
+// 首屏不拉图表库：这些页按需分包（宪法第 8 条栈纪律不变，只是切 chunk）
 const MarketPage = React.lazy(() => import('./pages/MarketPage'))
-const StrategyPage = React.lazy(() => import('./pages/StrategyPage'))
 const BacktestPage = React.lazy(() => import('./pages/BacktestPage'))
 const WatchPage = React.lazy(() => import('./pages/WatchPage'))
 const GuidePage = React.lazy(() => import('./pages/GuidePage'))
@@ -21,7 +20,6 @@ const ManualPage = React.lazy(() => import('./pages/ManualPage'))
 const NAV = [
   { to: '/watch', label: '实时盯盘' },
   { to: '/market', label: '行情面板' },
-  { to: '/strategy', label: '策略工作台' },
   { to: '/backtest', label: '回测报告' },
   { to: '/monitor', label: '实盘监控' },
   { to: '/channels', label: '行情与交易' },
@@ -77,6 +75,8 @@ function HealthBadge() {
 }
 
 export default function App() {
+  const location = useLocation()
+  const pageTitle = NAV.find((n) => location.pathname.startsWith(n.to))?.label ?? 'QuantDesk'
   // 实盘二次确认（D17）：全局监听 confirm_request，服务端强制、前端仅表现层
   const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null)
   // 确认/拒绝指令送不出服务端时必须让用户看见——这直接关系真实资金
@@ -122,6 +122,7 @@ export default function App() {
     <div className="app">
       <aside>
         <h1>QuantDesk</h1>
+        <p className="brand-sub">A股 · 港股 看盘与回测</p>
         <nav>
           {NAV.map((n) => (
             <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -132,6 +133,7 @@ export default function App() {
       </aside>
       <main>
         <header>
+          <span className="page-title">{pageTitle}</span>
           <HealthBadge />
         </header>
         {gateErr && (
@@ -156,7 +158,6 @@ export default function App() {
             <Route path="/watch" element={<WatchPage />} />
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/manual" element={<ManualPage />} />
-            <Route path="/strategy" element={<StrategyPage />} />
             <Route path="/backtest" element={<BacktestPage />} />
             <Route path="/monitor" element={<MonitorPage />} />
             <Route path="/channels" element={<ChannelsPage />} />

@@ -47,7 +47,7 @@ def test_section_routes_exist_in_frontend():
 
 
 def test_groups_are_declared_and_sections_complete():
-    assert len(manual.SECTIONS) == 13
+    assert len(manual.SECTIONS) == 12
     assert {s.group for s in manual.SECTIONS} <= set(manual.GROUPS)
     for g in manual.GROUPS:
         assert any(s.group == g for s in manual.SECTIONS), f"分组 {g} 里一章都没有"

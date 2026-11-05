@@ -26,11 +26,11 @@ import {
 } from '../api/client'
 
 /** 左侧目录的分组顺序（后端新增分组时自动追加在后面，不会被吞掉）。 */
-const GROUP_ORDER = ['入门', '看盘', '研究', '交易', '接入与数据', '自助排障']
+const GROUP_ORDER = ['入门', '看盘', '研究', '交易', '数据与设置', '自助排障']
 
 /** 站内路径白名单：只有真实存在的路由才渲染成可点链接（data/parquet 这类不是路由）。 */
 const APP_ROUTES = [
-  '/watch', '/market', '/strategy', '/backtest', '/monitor', '/channels',
+  '/watch', '/market', '/backtest', '/monitor', '/channels',
   '/interop', '/data', '/guide', '/compliance', '/settings', '/manual',
 ]
 
@@ -94,7 +94,7 @@ function SectionNav({
   onSelect: (slug: string) => void
 }) {
   return (
-    <div className="card strategy-tree">
+    <div className="card nav-list">
       <h3>手册目录（{total} 篇）</h3>
       {groups.map(([group, items]) => (
         <div key={group}>
@@ -230,7 +230,7 @@ function DocView({
   if (!doc) {
     return (
       <p className="placeholder">
-        从左边目录选一个板块，或直接改地址栏 /manual?s=板块拼音（每个板块都能深链分享）。
+        从左边目录选一个板块，就能看到那一篇：用之前要准备什么、一步步点哪里、界面上的数字怎么读。
       </p>
     )
   }
@@ -258,10 +258,7 @@ function DocView({
           </Link>
         )}
       </div>
-      <p className="sub-note mono">
-        {doc.slug}｜深链：/manual?s={doc.slug}
-        {doc.nav ? `｜导航入口：${doc.nav}` : ''}
-      </p>
+      {doc.nav && <p className="sub-note">对应左侧导航入口：{doc.nav}</p>}
 
       {doc.intro && (
         <p style={PRE_WRAP} className="prereq">
