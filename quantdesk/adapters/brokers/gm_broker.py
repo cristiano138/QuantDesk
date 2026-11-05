@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 
 __all__ = ["GmBroker"]
 
-_INSTALL_HINT = "掘金 SDK 需掘金终端在跑：uv pip install gm（详见 docs/integration/gm.md，不改 pyproject 主依赖）"
+_INSTALL_HINT = "需要掘金行情与交易组件（随掘金终端提供）；请先安装并登录掘金终端"
 
 # ---------- 参数映射表（置顶；真实取值/参数顺序需在线核对，集中一处便于修改） ----------
 # 委托方向 / 持仓方向 / 委托类型（掘金常量，getattr 优先取 SDK，缺失回退下列默认）

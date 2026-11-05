@@ -63,14 +63,11 @@ log = logging.getLogger(__name__)
 CHANNEL = "同花顺 iFinD"
 SDK_MODULE = "iFinDPy"
 INSTALL_HINT = (
-    "安装同花顺随账号分发的 iFinDPy 私有 whl：uv pip install <下载目录>\\iFinDPy-*.whl。"
-    "付费通道不进 pyproject 主依赖（宪法第 8 条），详见 docs/integration/ths_ifind.md"
+    "安装同花顺随账号提供的行情组件（iFinDPy）；组件与账号绑定，换电脑需重新授权"
 )
 CREDENTIAL_GUIDE = (
-    "iFinD 凭据未配置：需先由同花顺商务开通试用/正式账号，再在设置页把 "
-    "ifind.username + ifind.password（或 refresh token 方式的 ifind.refresh_token）"
-    "写入本地加密保险库；也可由主线程在 Settings 落地 ifind_* 字段后用环境变量注入。"
-)
+    "iFinD 账号未配置：需先由同花顺开通试用或正式账号，再在设置页填写 "
+    "iFinD 账号与密码（或授权 token），加密保存在本机。")
 
 # ---------- 历史行情映射（待在线核对：只改这些常量） ----------
 _HQ_INDICATORS = "thstime,open,high,low,close,volume,amount"

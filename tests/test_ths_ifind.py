@@ -98,7 +98,7 @@ def test_missing_sdk_raises_guidance_error(tmp_path, monkeypatch):
     with pytest.raises(AdapterError) as ei:
         feed.connect()
     msg = str(ei.value)
-    assert "iFinDPy" in msg and "whl" in msg
+    assert "iFinDPy" in msg and "安装" in msg
 
 
 # ================= 历史：解析归一化（纯函数） =================
@@ -271,7 +271,7 @@ def test_login_without_credentials_raises_config_guide(sdk, tmp_path):
                           cache_dir=tmp_path / "nc_c")
     with pytest.raises(ConfigError) as ei:
         feed.connect()
-    assert "ifind.refresh_token" in str(ei.value)
+    assert "设置页" in str(ei.value)
 
 
 def test_refresh_token_exchange_failure_is_connection_lost(sdk, tmp_path):

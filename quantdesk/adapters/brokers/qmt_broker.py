@@ -51,10 +51,10 @@ log = logging.getLogger(__name__)
 __all__ = ["QmtBroker"]
 
 _INSTALL_HINT = (
-    "xtquant 需券商 QMT 客户端自带的 whl：uv pip install xtquant（或安装券商提供的 "
-    "xtquant-x.x.x.whl）；本项目不改 pyproject 主依赖，详见 docs/integration/qmt.md"
+    "需要券商提供的 miniQMT 行情与交易组件（xtquant，随 QMT 客户端一同安装）；"
+    "安装后在设置页填写行情数据目录与资金账号"
 )
-_LOGIN_GUIDE = "请确认 miniQMT/QMT 客户端已登录且开启「极简模式（独立交易）」，userdata 路径指向客户端 userdata 目录"
+_LOGIN_GUIDE = "请确认 miniQMT/QMT 客户端已登录且开启「极简模式（独立交易）」，设置页的行情数据目录指向客户端数据目录"
 
 # ---------- 委托方向常量（xtconstant 优先，缺失才用下列兜底值） ----------
 _SIDE_CONST: dict[str, tuple[tuple[str, ...], int]] = {

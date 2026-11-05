@@ -49,7 +49,7 @@ GATED_FIELDS: dict[str, tuple[object, str]] = {
     # 危险方向 → 需要确认文本。注意 simulation_only 的危险值是 False（关模拟=开实盘），
     # enable_easytrader 的危险值是 True——两者方向相反，不能一律按「改成 True 才拦」。
     "simulation_only": (False, "关闭模拟盘 → 委托将真实发往券商通道"),
-    "enable_easytrader": (True, "启用非官方 GUI 自动化通道 → 稳定性低、可能违反客户端使用条款"),
+    "enable_easytrader": (True, "启用非官方界面自动下单 → 稳定性低、可能违反客户端使用条款"),
 }
 
 RISK_CONFIRM_PHRASE = "我知晓并承担实盘交易风险"

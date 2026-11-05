@@ -120,7 +120,7 @@ def spa(path: str):
     if not index.exists():
         raise HTTPException(
             status_code=503,
-            detail="前端产物未构建：cd frontend && pnpm build（开发模式请用 vite dev 的 5173 端口）")
+            detail="界面文件缺失，请重新运行 启动.bat 或重新安装软件后打开")
     return FileResponse(index)
 
 

@@ -449,9 +449,9 @@ class EasytraderBroker(BrokerAdapter):
         ths_path = (str(credentials.get("ths_path") or "") or self._ths_path
                     or get_secret("easytrader.ths_path") or self._guess_xiadan_path())
         mod = import_optional(
-            "easytrader", channel="easytrader（同花顺 GUI 自动化）",
-            install_hint="pip install easytrader（会带上 pywinauto；非官方通道，"
-                         "需先在设置页确认风险并置 enable_easytrader=True）")
+            "easytrader", channel="easytrader（同花顺下单程序）",
+            install_hint="需安装 easytrader 同花顺下单组件；非官方通道，"
+                         "需先在设置页确认风险并启用")
         self._client = client
         self._ths_path = ths_path
         try:
@@ -537,8 +537,7 @@ class EasytraderBroker(BrokerAdapter):
         self._require_connected("下单")
         if order.order_type in (OrderType.MARKET, "market"):
             raise BrokerError(
-                "easytrader（同花顺 GUI 自动化）只支持限价单：市价单需先在线核对客户端"
-                "下单面板的市价控件形态（见 docs/integration/easytrader.md），当前版本 fail-closed 拒单")
+                "同花顺下单程序（easytrader）只支持限价单：市价单暂不支持，已直接拒单")
         side = order.side.value if isinstance(order.side, Side) else str(order.side)
         symbol6 = self._to_client_symbol(order.symbol)
         price = float(order.price)

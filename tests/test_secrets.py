@@ -74,7 +74,7 @@ def test_corrupted_vault_gives_actionable_error(tmp_path):
     with pytest.raises(ConfigError) as ei:
         secrets.get_secret("gm.token")
     msg = str(ei.value)
-    assert "DPAPI" in msg and "重新录入" in msg              # 必须说清「为什么会这样、怎么办」
+    assert "账户" in msg and "重新录入" in msg               # 必须说清「为什么会这样、怎么办」
 
 
 @requires_dpapi

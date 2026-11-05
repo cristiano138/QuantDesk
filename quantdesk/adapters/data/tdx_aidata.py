@@ -52,9 +52,8 @@ _OFFICIAL_MODULE = "TdxAiData"
 _PYTDX_MODULE = "pytdx.hq"
 
 _INSTALL_HINT_BOTH = (
-    "安装二者之一即可：① pip install pytdx（社区开源，直连通达信行情服务器，免账号，"
-    "无需改 pyproject，按需装在当前 venv）；② 安装通达信官方 AI 数据 SDK（模块名 "
-    "TdxAiData，随官方客户端分发、需申请权限）。"
+    "安装二者之一即可：① 免费开源的通达信行情组件（pytdx，免账号，直连通达信行情服务器）；"
+    "② 通达信官方数据组件（TdxAiData，随官方客户端提供、需申请权限）。"
 )
 
 # 通达信公开行情服务器（vip）候选，连接时依次试连——不硬编码单一 IP。

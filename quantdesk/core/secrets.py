@@ -91,9 +91,8 @@ def _from_blob(blob: _DataBlob) -> bytes:
 def _dpapi_call(fn, data: bytes, what: str) -> bytes:
     if not _dpapi_available():
         raise ConfigError(
-            "凭据保险库不可用：本机没有 Windows DPAPI（crypt32）。"
-            "QuantDesk 的实盘凭据必须加密存储，不支持明文落盘；"
-            "如需在非 Windows 环境运行，请只使用模拟盘（simulation_only=True）。")
+            "账号加密保存暂不可用：当前电脑缺少系统加密能力。"
+            "实盘账号信息必须加密保存，不能明文存储；如需继续使用，请只在模拟盘模式下运行。")
     _bind_signatures()
     in_blob, keep = _to_blob(data)              # keep 防止 GC 回收缓冲区
     entropy, keep_e = _to_blob(_ENTROPY)
@@ -104,9 +103,9 @@ def _dpapi_call(fn, data: bytes, what: str) -> bytes:
     del keep, keep_e                             # 此刻指针不再需要
     if not ok:
         raise ConfigError(
-            f"DPAPI {what} 失败（GetLastError={ctypes.get_last_error()}）。"
-            + ("保险库文件损坏，或换了 Windows 账户/机器（密文与账户绑定）——"
-               "请在设置页重新录入凭据。" if what == "解密" else "本机 DPAPI 策略可能禁用了加密。")
+            f"账号信息{what}失败。"
+            + ("保存文件损坏，或换了电脑/系统账户（加密内容与账户绑定）——"
+               "请在设置页重新录入账号信息。" if what == "解密" else "本机系统策略可能禁用了加密保存，请检查系统安全设置。")
         )
     return _from_blob(out_blob)
 
@@ -131,8 +130,8 @@ def _load() -> dict:
         raise
     except Exception as e:  # noqa: BLE001 文件损坏/换机器/换 Windows 账户
         raise ConfigError(
-            f"凭据保险库无法解密（{e.__class__.__name__}）：DPAPI 密文与 Windows 账户绑定，"
-            f"重装系统或换用户后需重新录入凭据。文件：{p}") from e
+            "账号信息无法解密：加密内容与当前电脑账户绑定，"
+            f"重装系统或换账户后需在设置页重新录入。文件：{p}") from e
 
 
 def _save(store: dict) -> None:

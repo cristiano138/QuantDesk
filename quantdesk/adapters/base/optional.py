@@ -94,9 +94,7 @@ def import_optional(module: str, *, channel: str, install_hint: str) -> ModuleTy
     try:
         return importlib.import_module(module)
     except Exception as e:  # noqa: BLE001 — 导入期任何异常都归一为结构化错误
-        raise AdapterError(
-            f"{channel} 依赖模块 {module!r} 未就绪：{e.__class__.__name__}: {e}。{install_hint}"
-        ) from e
+        raise AdapterError(f"{channel} 缺少运行组件（{module}）：{install_hint}") from e
 
 
 def _static_capabilities(cls: type) -> tuple[str, ...]:

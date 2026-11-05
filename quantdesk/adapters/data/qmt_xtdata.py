@@ -52,8 +52,8 @@ log = logging.getLogger(__name__)
 __all__ = ["QmtXtdataFeed"]
 
 _INSTALL_HINT = (
-    "xtquant 需券商 QMT 客户端自带的 whl：uv pip install xtquant（或安装券商提供的 "
-    "xtquant-x.x.x.whl）；本项目不改 pyproject 主依赖，详见 docs/integration/qmt.md"
+    "需要券商提供的 miniQMT 行情组件（xtquant，随 QMT 客户端一同安装）；"
+    "安装后在设置页填写行情数据目录"
 )
 _LOGIN_GUIDE = "请登录 miniQMT 客户端（开启极简模式/独立交易）后重试"
 

@@ -172,7 +172,7 @@ def test_missing_sdk_raises_structured_error_with_install_hint(make_broker):
     b = make_broker()
     with pytest.raises(AdapterError) as ei:
         b.connect(ths_path=THS_PATH)
-    assert "easytrader" in str(ei.value) and "pip install" in str(ei.value)
+    assert "easytrader" in str(ei.value) and "安装" in str(ei.value)
     assert not isinstance(ei.value, ImportError)
 
 
