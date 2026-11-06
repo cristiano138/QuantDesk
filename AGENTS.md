@@ -203,9 +203,14 @@ Account{total_asset, cash, market_value, frozen, updated_at}
   确认按钮只靠 disabled 挡人。
 - 验收：真实行情八只标的（含沪B/深B/港股/北交所新股/科创板）全部模拟成交；PC 更新沙箱
   备好→换上→篡改包三段全绿（含中文路径）；pytest 全量通过；APK 重打 85KB（code 2 / name 1.2）三重签名通过。
-- 诚实边界：APK 未真机安装；`frontend/dist` 与 `node_modules` 不在这台机器上（按你要求删掉了工具链），
-  因此更新包暂不含网页界面、电脑端 exe 目前会提示「找不到软件本体」、React 交易面板未经构建验证；
-  恢复命令 `cd frontend && npm install && npm run build`（未擅自执行）。
+- 同日续（补遗 4）：用户报「桌面 exe 打不开」——根因就是上面那条边界：启动器判定软件目录要
+  `frontend/dist/index.html` 存在，而上一轮「删工具链」把构建产物 `dist` 一起删了。已
+  `npm install --prefer-offline`（全命中本机缓存）+ `npm run build`（tsc strict 通过，
+  TradePanel 从此有构建验证）重建 `dist` 并按要求删掉 `node_modules`，只留结果。
+  现在 `/selftest` 回 `root=F:\量化交易`、`health8787=200 OK`、`appWindow=已开`，
+  更新包也从 3 个文件变 13 个（网页界面会随更新换上）。
+  **纪律：`frontend/dist` 是成品的运行依赖，不是工具链——清工具链只清 `node_modules`。**
+  仍在的边界：APK 未真机安装。
 
 2026-11-06 · **行情准确度 + 手机端重做轮**（用户五项反馈：手机端与电脑不一致 / 加自选只有代号 /
 宇树科技今开昨收反了 / 要选股器不要手打代码 / 图线要能放大看细节 + 盯盘间隔提速）。
