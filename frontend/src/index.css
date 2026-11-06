@@ -1226,3 +1226,107 @@ button:focus-visible {
     transition: none !important;
   }
 }
+
+/* ---------------- 模拟买卖面板 ---------------- */
+.trade-panel .trade-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.trade-panel .trade-side button {
+  min-width: 72px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: #eef2f7;
+  color: var(--ink-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trade-panel .trade-side button.active.buy {
+  background: var(--up);
+  border-color: var(--up);
+  color: #fff;
+}
+
+.trade-panel .trade-side button.active.sell {
+  background: #12a05c;
+  border-color: #12a05c;
+  color: #fff;
+}
+
+.trade-panel .trade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0 2px;
+}
+
+.trade-panel .trade-qty,
+.trade-panel .trade-price {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trade-panel .trade-row input[type='number'] {
+  width: 118px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  background: #fff;
+  color: var(--ink);
+}
+
+.trade-panel .trade-row input[type='number']:disabled {
+  background: #f2f5fa;
+  color: var(--muted);
+}
+
+.trade-panel .trade-market {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.trade-panel .trade-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.trade-panel .trade-foot .primary {
+  margin-left: auto;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--brand);
+  color: #fff;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trade-panel .trade-foot .primary:disabled {
+  background: var(--line-strong);
+  color: #fff;
+  cursor: default;
+}
+
+.badge-up {
+  background: #e8f6ee;
+  border: 1px solid #b7e3c9;
+  color: #0b6b3c;
+}

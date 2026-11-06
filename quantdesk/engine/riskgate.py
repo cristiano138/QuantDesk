@@ -2,7 +2,7 @@
 
 三道闸（宪法第 2 条，顺序强制）：
 ① 全局模拟盘开关：simulation_only ON → 路由内置模拟撮合（实盘通道缺位不影响）；
-② A 股规则校验：T+1 可用 / 整手 / 委托价 ∈ [跌停, 涨停]（含 ST ±5%）/
+② 交易规则校验：T+1 可用 / 整手 / 委托价 ∈ [跌停, 涨停]（含 ST ±5%）/
    单票市值上限 / 日委托数上限 / 资金充足；拦截 → RISK 事件 + message 落库；
 ③ 实盘二次确认（PENDING_CONFIRM → WS 推送 → 10s 超时作废，D17 完整版）。
 
@@ -10,11 +10,19 @@ fail-closed 口径：
 - 实盘路径缺通道/断线 → 直接拒单（不排队不重试）；
 - 实盘限价单缺昨收数据 → 拒（无法校验涨跌停区间）；模拟盘缺昨收 → 放行并 LOG 告警
   （模拟盘用于策略迭代，实盘绝不绕过校验）。
+
+两处市场差别（2026-11-06 起的产品口径，见 AGENTS.md 第 10 条）：
+- **港股**：内置模拟盘（本机虚拟资金）可以买卖；实盘通道一律拒单——不开港股真实下单。
+- **涨跌停区间**：优先用行情给的交易所官方值（腾讯 p47/p48、东财 f51/f52、同花顺 69/70，
+  三源已实测逐位一致），官方值取不到才按昨收×幅度自己算。自己算会把「上市首日/次日起
+  不设涨跌幅」的正常价判成越界（实测 N森峰 920085 现价 44.88、昨收 17.79 被自家
+  ±30% 区间拒掉），那是买不了的假故障。
 """
 
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -23,15 +31,17 @@ from uuid import uuid4
 import pandas as pd
 
 from quantdesk.core import constants
-from quantdesk.core.enums import AdjustType, Frequency, OrderStatus, OrderType, Side
+from quantdesk.core.enums import AdjustType, Board, Frequency, OrderStatus, OrderType, Side
 from quantdesk.core.errors import ConnectionLostError
 from quantdesk.core.events import Event, EventType, EventBus
 from quantdesk.core.models import Order
-from quantdesk.core.symbols import board_of, is_hk, is_st
+from quantdesk.core.symbols import board_of, currency_of, is_hk, is_st, normalize
 from quantdesk.core.timeutil import now_ms
 from quantdesk.engine.matching import FeeCalculator
 from quantdesk.store import repo
 from quantdesk.store.parquet_store import ParquetStore
+
+log = logging.getLogger(__name__)
 
 __all__ = ["RiskGate"]
 
@@ -66,10 +76,17 @@ class RiskGate:
                  max_daily_orders: int | None = None,
                  fee: FeeCalculator | None = None,
                  confirm_timeout_s: float = 10.0,
-                 live_provider=None) -> None:
+                 live_provider=None, quote_provider=None) -> None:
+        """quote_provider：callable(symbol) -> 行情快照 dict。
+
+        涨跌停与昨收一律先在调用点问行情（宪法第 11 条⑤）；没注入或取不到才回落
+        到本地日线。用过期日线算出来的区间会拒掉今天的正常委托——那是数据口径错，
+        不是风控严格。
+        """
         self.paper = paper_broker
         self.live = live_broker
         self.live_provider = live_provider
+        self.quote_provider = quote_provider
         self.settings = settings          # None → 运行时读 config（支持 D19 热切）
         self.db_path = db_path
         self.bus = event_bus
@@ -83,6 +100,7 @@ class RiskGate:
         self._armed_at: dict[str, float] = {}   # 确认窗口计时（重启后重新起算）
         self._lock = threading.RLock()
         self._prev_close_cache: dict[str, tuple[str, float]] = {}
+        self._quote_cache: dict[str, tuple[str, dict]] = {}
         self._expiry_stop = threading.Event()
         if confirm_timeout_s > 0:
             self._expiry_thread = threading.Thread(target=self._expiry_loop,
@@ -127,11 +145,11 @@ class RiskGate:
         if not getattr(o, "order_id", ""):
             o = _replace(o, order_id=self.new_order_id())
 
-        # 只读产品红线：港股仅供看盘，下单意图在咽喉处直接拒掉（不进任何通道）
-        if is_hk(o.symbol):
-            return self._reject(o, f"{o.symbol} 为港股——本工作台港股只读看盘，未开通交易通道")
-
         sim = self._sim_only()
+        # 港股：模拟盘（本机虚拟资金）放开；实盘通道仍然不开——闸②的市场规则按港股口径走
+        if is_hk(o.symbol) and not sim:
+            return self._reject(o, f"{o.symbol} 为港股——港股只做模拟盘，真实下单通道未开通")
+
         broker = self.paper if sim else self._resolve_live()
         if broker is None:
             return self._reject(o, "模拟盘开关 OFF 且实盘通道未接入——fail-closed 拒单"
@@ -180,8 +198,8 @@ class RiskGate:
             board = board_of(order.symbol)
         except Exception as e:                         # noqa: BLE001
             return [f"非法证券代码: {order.symbol}（{e}）"]
-        if is_hk(order.symbol):                        # 绕过 submit 直连 validate 也要拦
-            return [f"{order.symbol} 为港股——港股只读看盘，交易通道未开通"]
+        if is_hk(order.symbol) and live:                # 绕过 submit 直连 validate 也要拦
+            return [f"{order.symbol} 为港股——港股只做模拟盘，真实下单通道未开通"]
         if order.volume <= 0:
             v.append(f"委托数量必须 > 0（当前 {order.volume}）")
             return v                                   # 后续检查无意义
@@ -191,10 +209,7 @@ class RiskGate:
             from quantdesk.core.constants import is_valid_lot
 
             if not is_valid_lot(order.volume, board):
-                if board.name == "STAR":
-                    v.append(f"科创板买入须 ≥200 股（当前 {order.volume}）")
-                else:
-                    v.append(f"买入须为 100 股整数倍（当前 {order.volume}）")
+                v.append(f"{constants.lot_rule_text(board)}（当前 {order.volume} 股）")
 
         # T+1：卖出量 ≤ available（查最新持仓快照）
         if side == Side.SELL.value and broker is not None:
@@ -208,21 +223,23 @@ class RiskGate:
 
         # 委托价 ∈ [跌停, 涨停]（仅限价单；市价单在撮合端控制）
         if otype == OrderType.LIMIT.value and order.price > 0:
-            prev = self._prev_close(order.symbol)
-            if prev is None:
+            band = self._limit_band(order.symbol, board)
+            if band is None:
                 if live:
-                    v.append("无昨收数据，无法校验涨跌停区间——fail-closed 拒单（请先下载数据）")
+                    v.append("取不到昨收/涨跌停，无法校验价格区间——fail-closed 拒单"
+                             "（请确认行情源可用或先下载日线）")
                 else:
                     self._publish(EventType.LOG, {
                         "message": f"{order.symbol} 无昨收数据，跳过涨跌停校验（模拟盘）"})
             else:
-                st = is_st(order.symbol)
-                lo = constants.limit_down(prev, board, st)
-                hi = constants.limit_up(prev, board, st)
-                if not (lo - 1e-9 <= order.price <= hi + 1e-9):
-                    tag = "（ST）" if st else ""
-                    v.append(f"委托价 {order.price:.2f} 超出涨跌停区间{tag} "
-                             f"[{lo:.2f}, {hi:.2f}]——疑似复权价误用")
+                lo, hi, basis = band
+                if lo is not None and hi is not None and not (lo - 1e-9 <= order.price <= hi + 1e-9):
+                    v.append(f"委托价 {order.price:.2f} 超出涨跌停区间 [{lo:.2f}, {hi:.2f}]"
+                             f"（{basis}）——疑似复权价误用")
+                elif lo is None and hi is None and not is_hk(order.symbol):
+                    # 交易所明写「本日无价格限制」（新股首日/次日起、退市整理期等）
+                    self._publish(EventType.LOG, {
+                        "message": f"{order.symbol} {basis}，本单不做涨跌停区间校验"})
 
         # 资金充足（买入：金额 + 费用 ≤ 可用现金）
         if side == Side.BUY.value and broker is not None and order.price > 0:
@@ -251,8 +268,123 @@ class RiskGate:
 
         return v
 
+    def rule_card(self, symbol: str) -> dict:
+        """下单前该知道的都在这：板块/币种/最小委托量/价格区间/这单能不能下、为什么。
+
+        和 validate() 共用同一批判据（_limit_band / constants），界面显示的规则和真正
+        执行的规则必须是同一份事实——否则用户按界面填的单，会被一条看不见的规则退回。
+        """
+        sim = self._sim_only()
+        try:
+            s = normalize(symbol)
+            board = board_of(s)
+        except Exception as e:                         # noqa: BLE001
+            return {"symbol": symbol, "ok": False, "error": f"代码认不出来：{e}",
+                    "board": "", "board_cn": "未知", "currency": "", "min_volume": 0}
+        row = self._quote_row(s)
+        band = self._limit_band(s, board)
+        lo, hi, basis = (band if band else (None, None, "取不到昨收，暂无法给出价格区间"))
+        last = row.get("last") or 0.0
+        board_cn = {Board.MAIN: "主板", Board.GEM: "创业板", Board.STAR: "科创板",
+                    Board.BSE: "北交所", Board.HK: "港股"}[board]
+        ok, reason = True, ""
+        if board is Board.HK and not sim:
+            ok, reason = False, "港股只做模拟盘，真实下单通道未开通"
+        if not row:
+            reason = reason or ("行情取不到，价格区间无法核对；模拟盘仍可下单，"
+                                "但委托价请自己确认")
+        est_fee = 0.0
+        if last:
+            notional = last * constants.min_volume(board)
+            est_fee = round(self.fee.fee(Side.BUY, notional, s), 2)
+        return {
+            "symbol": s, "name": row.get("name") or "", "ok": ok, "reason": reason,
+            "board": board.value, "board_cn": board_cn,
+            "currency": currency_of(s), "min_volume": constants.min_volume(board),
+            "lot_step": constants.LOT_SIZE if board in (Board.MAIN, Board.GEM) else 1,
+            "lot_rule": constants.lot_rule_text(board),
+            "t_plus_1": constants.is_t_plus_1(board),
+            "last": last, "prev_close": row.get("prev_close"),
+            "limit_up": hi, "limit_down": lo, "band_basis": basis,
+            "simulation_only": sim,
+            "need_cash": round(last * constants.min_volume(board) + est_fee, 2) if last else 0.0,
+            "fee_estimate": est_fee,
+        }
+
+    def _quote_row(self, symbol: str) -> dict:
+        """在调用点取一次行情快照（名称/昨收/涨跌停都来自这里），当日缓存。
+
+        缓存只在取到时写：取不到就缓存空，等于今天这一天这只票再也没机会走官方口径
+        （宪法第 11 条⑥——缺失不许填成看起来像的值，也不许把「还没取到」当成「没有」。）
+        """
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        cached = self._quote_cache.get(symbol)
+        if cached and cached[0] == today:
+            return cached[1]
+        if self.quote_provider is None:
+            return {}
+        try:
+            row = self.quote_provider(symbol) or {}
+        except Exception as e:                         # noqa: BLE001 取行情失败回落日线口径
+            log.info("涨跌停校验取实时快照失败 %s: %s", symbol, e)
+            return {}
+        if row:
+            self._quote_cache[symbol] = (today, dict(row))
+        return dict(row)
+
+    def _limit_band(self, symbol: str, board) -> tuple[float | None, float | None, str] | None:
+        """(跌停, 涨停, 口径说明)；None = 无从判定；(None, None, …) = 本日不设涨跌幅限制。
+
+        优先级：① 行情给的交易所官方涨跌停价 → ② 昨收 × 板块幅度（昨收同样先取行情、
+        再回落本地日线）。ST 判定用简称兜底（注册表只在有名单时才有值）。
+        """
+        row = self._quote_row(symbol)
+        lu = _pos_or_none(row.get("limit_up"))
+        ld = _pos_or_none(row.get("limit_down"))
+        if lu and ld and lu > ld:
+            return ld, lu, "交易所官方涨跌停价"
+        if board is not None and not constants.has_price_limit(board):
+            return None, None, "该市场不设涨跌幅限制"
+        live_prev = _pos_or_none(row.get("prev_close"))
+        prev = live_prev or self._prev_close(symbol)
+        if not prev:
+            return None
+        st = is_st(symbol) or _name_says_st(row.get("name"))
+        pct = constants.limit_pct(board, st)
+        if pct is None:
+            return None, None, "该市场不设涨跌幅限制"
+        tag = "（ST ±5%）" if st else ""
+        basis = f"按昨收 {prev:.2f} × ±{pct:.0%} 推算{tag}"
+        lo = constants.limit_down(prev, board, st)
+        hi = constants.limit_up(prev, board, st)
+        name = str(row.get("name") or "").strip()
+        if _name_says_new(name):
+            return None, None, "简称带新上市标记（N/C），上市初期不设涨跌幅限制"
+        # 数据自证：当日真实成交**大幅**越过推算区间，说明今天交易所就是没设这个限制
+        # （新股上市初期常见）。阈值取「幅度的 2 倍」而不是贴着区间沿：除权日昨收口径差一点
+        # 就会造成小幅越界，那种时候更可能是数据问题，不能顺手把校验整条放开。
+        # 只在昨收来自实时快照时才这样判——用过期日线判「越界」是自己骗自己。
+        if live_prev:
+            far_hi = prev * (1 + 2 * pct)
+            far_lo = prev * (1 - 2 * pct)
+            day_hi = _pos_or_none(row.get("high")) or _pos_or_none(row.get("last"))
+            day_lo = _pos_or_none(row.get("low")) or _pos_or_none(row.get("last"))
+            if (day_hi and day_hi > far_hi + constants.PRICE_TICK / 2) or \
+               (day_lo and day_lo < far_lo - constants.PRICE_TICK / 2):
+                return None, None, (f"当日最高/最低大幅越过推算区间 [{lo:.2f}, {hi:.2f}]，"
+                                    "判定本日不设涨跌幅限制")
+            return lo, hi, basis
+        # 昨收只从本地日线补到：区间可靠性下降，越界太多就当成不可用（不硬拒当天的正常价）
+        last = _pos_or_none(row.get("last"))
+        if last and not (lo * 0.8 - 0.01 <= last <= hi * 1.2 + 0.01):
+            return None
+        return lo, hi, basis + "（昨收取自本地日线，行情快照未给）"
+
     def _prev_close(self, symbol: str) -> float | None:
-        """昨收（原始价口径，不复权）；日线表取 < 今日的最后一根。带当日缓存。"""
+        """昨收（原始价口径，不复权）；日线表取 < 今日的最后一根。带当日缓存。
+
+        这里只是**回落**：实时快照给不到（源未就绪/断网）才会走到这。
+        """
         if self.store is None:
             return None
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
@@ -365,6 +497,37 @@ class RiskGate:
 def _today_start_ms() -> int:
     d = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
     return int(d.timestamp() * 1000)
+
+
+def _pos_or_none(v) -> float | None:
+    """正数才当数：接口对「无涨跌停」给 0 / -1 / 空串，这些都是没有，不是价格。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
+
+
+def _name_says_st(name) -> bool:
+    """证券简称以 ST / *ST 开头 → ±5%。
+
+    涨跌停校验只看注册表时，没同步名单的日子会把 ST 股按 ±10% 放行（判得过松）；
+    简称是行情快照本来就带的字段，用它兜底不需要额外权限。
+    """
+    s = str(name or "").strip().upper()
+    return s.startswith("ST") or s.startswith("*ST")
+
+
+def _name_says_new(name) -> bool:
+    """简称以 N（上市首日）/ C（上市后 2~5 日）开头 = 交易所标明的新上市标记。
+
+    全面注册制后新股上市前 5 个交易日不设涨跌幅，界面上一律按板块幅度算区间会把
+    这些票当天的正常价判成越界（实测 N森峰 920085：现价 44.88、昨收 17.79、
+    按 ±30% 区间 [12.45, 23.13] 直接被拒——用户看到的就是「这只买不了」）。
+    只认「N/C + 汉字」，避免把 TCL科技 这类以字母开头的简称误伤。
+    """
+    s = str(name or "").strip()
+    return len(s) > 1 and s[0] in ("N", "C") and "\u4e00" <= s[1] <= "\u9fff"
 
 
 def _replace(o: Order, **kw) -> Order:

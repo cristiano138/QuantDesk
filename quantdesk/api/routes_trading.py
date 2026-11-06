@@ -35,6 +35,16 @@ def _order_json(o) -> dict:
     }
 
 
+@router.get("/rules")
+def order_rules(symbol: str) -> dict:
+    """下单框的规则卡：买这只至少要多少股、什么币种、价格区间多少、能不能买、为什么。
+
+    判据出自 RiskGate（与真正执行校验的是同一份），界面不许自己另算一套。
+    """
+    svc = get_trading_service()
+    return svc.order_rules(symbol)
+
+
 @router.post("/orders")
 def place_order(req: PlaceOrderRequest) -> dict:
     """下单（经 RiskGate 三道闸；模拟盘开关 ON 时路由内置撮合）。"""

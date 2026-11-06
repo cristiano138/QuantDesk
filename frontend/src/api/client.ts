@@ -1245,3 +1245,90 @@ export async function searchManual(q: string): Promise<{ q: string; hits: Manual
   const hits = Array.isArray(d) ? d : Array.isArray(d?.hits) ? d.hits : []
   return { q, hits }
 }
+
+
+/* ---------------- 交易（模拟盘/实盘同一套闸，服务端裁决） ---------------- */
+
+/** 下单前该知道的规则：出自 RiskGate，与真正执行校验的是同一份事实。 */
+export interface OrderRules {
+  symbol: string
+  name?: string
+  ok: boolean
+  reason?: string
+  error?: string
+  board?: string
+  board_cn?: string
+  currency?: string
+  min_volume?: number
+  lot_step?: number
+  lot_rule?: string
+  t_plus_1?: boolean
+  last?: number
+  prev_close?: number | null
+  limit_up?: number | null
+  limit_down?: number | null
+  band_basis?: string
+  simulation_only?: boolean
+  need_cash?: number
+  fee_estimate?: number
+}
+
+export interface OrderAck {
+  order_id: string
+  symbol: string
+  side: string
+  price: number
+  volume: number
+  order_type: string
+  status: string
+  filled_volume: number
+  avg_filled_price: number
+  message: string
+  strategy_id: string
+}
+
+export interface AccountSummary {
+  total_asset: number
+  cash: number
+  market_value: number
+  frozen: number
+  updated_at: number
+}
+
+export interface PositionRow {
+  symbol: string
+  volume: number
+  available: number
+  avg_cost: number
+  market_value: number
+  strategy_id: string
+}
+
+export async function getOrderRules(symbol: string): Promise<OrderRules> {
+  const r = await api.get<OrderRules>('/trading/rules', {
+    params: { symbol },
+    timeout: 20000,      // 服务端可能要现取一次行情快照，5s 默认超时不够
+  })
+  return r.data
+}
+
+export async function placeOrder(req: {
+  symbol: string
+  side: 'buy' | 'sell'
+  volume: number
+  price?: number | null
+  order_type?: 'limit' | 'market'
+}): Promise<OrderAck> {
+  const r = await api.post<OrderAck>('/trading/orders', req, { timeout: 20000 })
+  return r.data
+}
+
+export async function getAccount(): Promise<AccountSummary> {
+  const r = await api.get<AccountSummary>('/trading/account')
+  return r.data
+}
+
+export async function getPositions(): Promise<PositionRow[]> {
+  const r = await api.get<PositionRow[]>('/trading/positions')
+  return r.data
+}

@@ -310,7 +310,7 @@ class BacktestEngine:
                 fill_vol = r.filled_volume
                 side = o.side.value if isinstance(o.side, Side) else str(o.side)
                 if side == Side.BUY.value:
-                    fill_vol = self._affordable_volume(r.fill_price, fill_vol)
+                    fill_vol = self._affordable_volume(r.fill_price, fill_vol, o.symbol)
                 if fill_vol <= 0:
                     o.status = OrderStatus.REJECTED
                     o.message = (o.message or "") + "资金不足拒绝"
@@ -348,9 +348,9 @@ class BacktestEngine:
         """apply_fill 返回新快照（纯函数），把订单簿中的同单替换为新对象。"""
         self._orders = [o if x.order_id == o.order_id else x for x in self._orders]
 
-    def _affordable_volume(self, price: float, desired: int) -> int:
-        """现金可负担的最大成交量（含费用，整手取整）——共用实现见 matching。"""
-        return affordable_volume(self.cash, price, desired, self.match_cfg.fee)
+    def _affordable_volume(self, price: float, desired: int, symbol: str | None = None) -> int:
+        """现金可负担的最大成交量（含费用，按该市场的递增单位取整）——共用实现见 matching。"""
+        return affordable_volume(self.cash, price, desired, self.match_cfg.fee, symbol=symbol)
 
     def _equity_row(self, dt: pd.Timestamp) -> dict:
         market_value = self.book.market_value(self._last_close)

@@ -79,10 +79,11 @@ public class MainActivity extends Activity {
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
         web.setBackgroundColor(CHROME_DARK);
-        web.setWebViewClient(new PageGuard());
+        web.setWebViewClient(new PageGuard(this));
         web.setWebChromeClient(new LoadBar(progress));
 
         web.loadUrl(START_URL);
+        Updater.checkOnLaunch(this);
     }
 
     @Override
@@ -120,10 +121,17 @@ public class MainActivity extends Activity {
      *  页面里的「在手机 App 中打开」等外链（同花顺/东方财富/腾讯自选股）必须交给系统：
      *  装了对应 App 就由它接手，没装就落浏览器；绝不能在壳内导航把看盘页顶掉。 */
     private static final class PageGuard extends WebViewClient {
+        private final Activity act;
+
+        PageGuard(Activity act) {
+            this.act = act;
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             if (request == null || request.getUrl() == null) return false;
             String scheme = request.getUrl().getScheme();
+            if ("qd".equals(scheme)) return LocalCommand.run(act, request.getUrl());
             if ("http".equals(scheme) || "https".equals(scheme)) {
                 try {
                     Intent intent = new Intent(Intent.ACTION_VIEW, request.getUrl());
@@ -142,6 +150,55 @@ public class MainActivity extends Activity {
             if (request != null && request.isForMainFrame()) {
                 view.loadDataWithBaseURL(START_URL, OFFLINE_PAGE, "text/html", "utf-8", null);
             }
+        }
+
+        /** 页面加载完，把「你在 App 里」和版本号告诉页面：更新那一行只在 App 里出现。
+         *  只递两个字符串，不开 addJavascriptInterface——不把原生能力交给网页去拼方法名。 */
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            if (url == null || !url.startsWith("file:///android_asset/")) return;
+            try {
+                view.evaluateJavascript("window.qdApp && window.qdApp('" + appVersion(act) + "',"
+                        + (Updater.autoOn(act) ? "true" : "false") + ")", null);
+            } catch (Exception ignored) {
+                // 低版本或页面自己没这个函数：更新那一行不显示，看盘不受影响
+            }
+        }
+    }
+
+    private static String appVersion(android.content.Context ctx) {
+        try {
+            String v = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).versionName;
+            return v == null ? "?" : v.replaceAll("[^0-9A-Za-z.\\-]", "");
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    /**
+     * 页面里「检查更新 / 自动更新开关」两个按钮走的窄门：只认这三条固定指令。
+     * 刻意不开 addJavascriptInterface——那等于把整个 App 的能力交给一个网页去拼方法名。
+     */
+    private static final class LocalCommand {
+        static boolean run(Activity act, android.net.Uri url) {
+            String cmd = url.getSchemeSpecificPart();
+            if (cmd == null) return false;
+            cmd = cmd.trim();
+            if ("check-update".equals(cmd)) {
+                Updater.checkNow(act);
+            } else if ("auto-update=on".equals(cmd)) {
+                Updater.setAutoUpdate(act, true);
+                say(act, "已开启自动更新：打开 App 时看一眼有没有新版本");
+            } else if ("auto-update=off".equals(cmd)) {
+                Updater.setAutoUpdate(act, false);
+                say(act, "已关闭自动更新：此后这个 App 不会为更新发一行网络请求");
+            }
+            return true;        // 认不出来的 qd: 指令也拦下来，不许在壳内导航顶掉看盘页
+        }
+
+        static void say(Activity act, String text) {
+            if (act.isFinishing()) return;
+            android.widget.Toast.makeText(act, text, android.widget.Toast.LENGTH_LONG).show();
         }
     }
 

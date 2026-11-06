@@ -12,8 +12,9 @@
   em     : "1.600000" / "0.000001" / "0.830001" / "116.00700"（东方财富 secid，含港股）
   tx     : "sh600000" / "sz000001" / "hk00700"（腾讯行情代码，含港股）
 
-港股口径说明：港股代码统一补足 5 位（700 → 00700）。本项目港股**只读**
-（无涨跌停/T+1/整手概念，且不接券商下单通道），风控闸口对 .HK 一律拒绝下单。
+港股口径说明：港股代码统一补足 5 位（700 → 00700）。港股**没有涨跌停、T+0、每手股数由
+发行人自定**，且报价是港币；内置模拟盘接受港股委托（本机虚拟资金），实盘通道仍不开
+（见 engine/riskgate 对 simulation_only 的分流）。
 """
 
 import re
@@ -37,6 +38,10 @@ _TX_MARKET = {"sh": "SH", "sz": "SZ", "hk": "HK", "bj": "BJ"}
 
 # 北交所代码段（K1：8xxxxx 等；92xxxx 为新增段）
 _BJ_PREFIXES = ("43", "83", "87", "88", "92", "4", "8")
+# B 股段：沪B 900xxx（美元报价）、深B 200xxx（港币报价）。
+# 早先这两段落进「无法识别市场前缀」直接抛错，B 股因此在模拟盘里根本进不去。
+_SH_B_PREFIXES = ("900", "901")
+_SZ_B_PREFIXES = ("200", "201")
 
 _ST_LOCK = threading.Lock()
 _ST_SYMBOLS: set[str] = set()
@@ -44,9 +49,9 @@ _ST_SYMBOLS: set[str] = set()
 
 def _suffix_of_bare(code6: str) -> str:
     """6 位裸代码 → 市场后缀（AKShare 口径推断）。"""
-    if code6.startswith("6"):
+    if code6.startswith(("6",) + _SH_B_PREFIXES):
         return "SH"
-    if code6.startswith(("0", "3")):
+    if code6.startswith(("0", "3") + _SZ_B_PREFIXES):
         return "SZ"
     if code6.startswith(_BJ_PREFIXES):
         return "BJ"
@@ -169,7 +174,11 @@ def from_internal(symbol: str, source: str) -> str:
 
 
 def is_hk(symbol: str) -> bool:
-    """是否港股（只读标的：不得进入下单路径，见 engine/riskgate 的显式拒绝）。
+    """是否港股。
+
+    产品口径（2026-11-06 修订，见 AGENTS.md 第 10 条）：港股可以在**内置模拟盘**里买卖
+    （本机虚拟资金，不接触任何券商），但**实盘通道一律不开**——RiskGate 在
+    simulation_only=False 时对 .HK 直接拒单。
 
     容忍非规范写法（hk00700 / 116.00700 / 700.HK）：风控咽喉在拿到规范代码之前就要判定，
     这里若抛异常会把"拒单"变成 500。认不出来的代码返回 False，交给 board_of 去报非法。
@@ -182,20 +191,41 @@ def is_hk(symbol: str) -> bool:
 
 def board_of(symbol: str) -> Board:
     """板块识别（K1 代码段：60xxxx 沪主板 / 00xxxx 深主板 / 30xxxx 创业板 /
-    688xxx 科创板 / 8xxxxx·43xxxx·92xxxx 北交所；港股单列 Board.HK）。"""
+    688xxx 科创板 / 8xxxxx·43xxxx·92xxxx 北交所 / 900xxx·200xxx B 股；港股单列 Board.HK）。
+
+    B 股与主板同属 Board.MAIN（±10% 涨跌停、100 股整手、T+1），差别只在报价币种，
+    由 currency_of() 单独给出——币种弄错会把「一手多少钱」算错 6~8 倍。
+    """
     s = _validate_internal(symbol)
     if s.endswith(".HK"):
         return Board.HK
     num = s.split(".")[0]
     if num.startswith(("688", "689")):
         return Board.STAR
-    if num.startswith(("300", "301", "302")):
+    if num.startswith("30"):                      # 300/301/302… 创业板新增段一并算进来
         return Board.GEM
     if num.startswith(_BJ_PREFIXES):
         return Board.BSE
-    if num.startswith(("60", "00", "001", "002", "003")):
+    if num.startswith(("60", "00", "001", "002", "003") + _SH_B_PREFIXES + _SZ_B_PREFIXES):
         return Board.MAIN
     raise SymbolError(f"无法识别板块: {symbol!r}")
+
+
+def currency_of(symbol: str) -> str:
+    """报价币种：沪市 B 股用美元、深市 B 股与港股用港币，其余人民币。
+
+    模拟盘的现金账按这个币种原样记账（不折算汇率）——界面必须写清币种，
+    否则用户会拿港币价格去比人民币资金，得出「一手买不起」的错误结论。
+    """
+    s = _validate_internal(symbol)
+    if s.endswith(".HK"):
+        return "HKD"
+    num = s.split(".")[0]
+    if s.endswith(".SH") and num.startswith(_SH_B_PREFIXES):
+        return "USD"
+    if s.endswith(".SZ") and num.startswith(_SZ_B_PREFIXES):
+        return "HKD"
+    return "CNY"
 
 
 def set_st_names(names: Iterable[str]) -> None:

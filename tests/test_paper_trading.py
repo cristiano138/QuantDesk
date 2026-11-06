@@ -312,3 +312,119 @@ def test_concurrent_tick_and_order_threads(tmp_path):
     acct = svc.account()
     assert acct.cash >= -1e-6
     assert acct.total_asset == pytest.approx(acct.cash + acct.market_value, abs=0.02)
+
+
+# ---------- 按需行情：没被实时泵订阅过的标的也要能立刻成交 ----------
+
+def fake_row(symbol, last=10.0, prev=9.9, bids=None, asks=None, ts_ms=None):
+    import time
+
+    return {"symbol": symbol, "name": "浦发银行", "last": last, "open": prev,
+            "high": round(last * 1.02, 2), "low": round(last * 0.98, 2),
+            "volume": 120_000, "amount": last * 120_000, "prev_close": prev,
+            "limit_up": round(prev * 1.1, 2), "limit_down": round(prev * 0.9, 2),
+            "bids": bids or [[round(last - 0.01, 2), 500]],
+            "asks": asks or [[round(last + 0.01, 2), 500]],
+            "ts_ms": ts_ms or int(time.time() * 1000)}
+
+
+def test_order_without_tick_fetches_quote_and_fills(db, monkeypatch):
+    """实时泵只推它订阅过的标的；用户点的这只不在里面 → 下单当场补一次行情，立刻撮合。
+
+    补不上行情时不假装成交：限价单照样挂着（等下一次行情），市价单 fail-closed 拒单。
+    """
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    calls = []
+
+    def quote(self, symbol):
+        calls.append(symbol)
+        return fake_row(symbol, last=10.0, prev=9.9)
+
+    monkeypatch.setattr(TradingService, "_quote_row", quote)
+    o = svc.place_order(SYM, "buy", 100, price=10.0)
+    assert o.status == OrderStatus.FILLED, o.message
+    assert calls == [SYM]                     # 运行期要取的字段必须在调用点取（宪法第 11 条⑤）
+    assert svc.get_order(o.order_id).status == OrderStatus.FILLED
+
+
+def test_market_order_no_longer_dies_for_missing_tick(db, monkeypatch):
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    monkeypatch.setattr(TradingService, "_quote_row", lambda self, s: fake_row(s, last=10.0))
+    o = svc.place_order(SYM, "buy", 100, price=None, order_type="market")
+    assert o.status == OrderStatus.FILLED, o.message
+
+
+def test_no_quote_available_keeps_old_behaviour(db, monkeypatch):
+    """取不到行情就如实回到老口径：市价单拒单，限价单挂起，绝不凭空造一个成交价。"""
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    monkeypatch.setattr(TradingService, "_quote_row", lambda self, s: {})
+    m = svc.place_order(SYM, "buy", 100, price=None, order_type="market")
+    assert m.status == OrderStatus.REJECTED and "无最新行情" in m.message
+    lim = svc.place_order(SYM, "buy", 100, price=9.0)
+    assert lim.status == OrderStatus.SUBMITTED          # 挂着，没有被静默丢掉
+
+
+def test_stale_tick_is_refreshed_before_matching(db, monkeypatch):
+    """手上那份行情已经是昨天的了，得先换成今天的，否则今天的委托按昨天价格撮合。"""
+    from datetime import timedelta
+
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    svc.paper.on_tick(mk_tick(10.0, dt=datetime.now() - timedelta(days=1)))
+    seen = []
+
+    def quote(self, symbol):
+        seen.append(symbol)
+        return fake_row(symbol, last=12.0, prev=11.8)
+
+    monkeypatch.setattr(TradingService, "_quote_row", quote)
+    o = svc.place_order(SYM, "buy", 100, price=12.0)
+    assert seen == [SYM]
+    assert o.status == OrderStatus.FILLED and o.avg_filled_price == 12.0
+
+
+def test_fresh_tick_is_not_refetched(db, monkeypatch):
+    """已有新鲜 tick 就不换撮合依据（闸问一次官方涨跌停是另一回事，那边有 TTL 缓存）。"""
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    svc.paper.on_tick(mk_tick(10.0, dt=datetime.now()))
+    before = svc.paper.latest_tick(SYM)
+    monkeypatch.setattr(TradingService, "_quote_row",
+                        lambda self, s: fake_row(s, last=99.0))
+    o = svc.place_order(SYM, "buy", 100, price=9.0)
+    assert svc.paper.latest_tick(SYM) is before          # 没被 99 元那份行情顶掉
+    assert o.status == OrderStatus.SUBMITTED             # 按 10 元行情，9 元买单挂起
+
+
+def test_symbol_is_normalised_before_it_reaches_the_gate(db, monkeypatch):
+    """手输 sh600000 / 600000 都要能下单，落库统一内部代码。"""
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    monkeypatch.setattr(TradingService, "_quote_row", lambda self, s: fake_row(s, last=10.0))
+    o = svc.place_order("sh600000", "buy", 100, price=10.0)
+    assert o.symbol == SYM
+    assert o.status == OrderStatus.FILLED, o.message
+
+
+def test_hk_single_share_market_order_fills(db, monkeypatch):
+    """实测缺陷：可负担量按 100 股取整，「买 1 股腾讯」被算成资金不足静默拒单。
+
+    港股每手股数由发行人自定、快照不提供 → 递增单位必须是 1 股（界面另注明实际每手）。
+    """
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    monkeypatch.setattr(TradingService, "_quote_row",
+                        lambda self, s: fake_row("00700.HK", last=419.4, prev=401.6))
+    o = svc.place_order("00700.HK", "buy", 1, price=None, order_type="market")
+    assert o.status == OrderStatus.FILLED, o.message
+    assert svc.paper.get_position("00700.HK")[0].available == 1      # T+0：立刻能卖
+
+
+def test_market_order_on_yesterday_quote_is_rejected(db):
+    """缓存里那份隔夜行情是**昨收**，按它撮合等于用昨天的价成交今天的单——必须拒，不是照成交。"""
+    from datetime import timedelta
+
+    svc = TradingService(initial_cash=100_000.0, db_path=db)
+    svc.paper.on_tick(mk_tick(10.0, dt=datetime.now() - timedelta(days=1)))
+    o = svc.place_order(SYM, "buy", 100, price=None, order_type="market")
+    assert o.status == OrderStatus.REJECTED
+    assert "收盘价" in o.message and "今日休市" in o.message
+    # 限价单不受影响：价格条件由委托自己给出，挂着等行情即可
+    lim = svc.place_order(SYM, "buy", 100, price=9.0)
+    assert lim.status == OrderStatus.SUBMITTED

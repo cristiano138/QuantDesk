@@ -25,7 +25,10 @@ ICO = os.path.join(HERE, "QuantDesk.ico")
 RUN_EXE = os.path.join(APP_DIR, "QuantDesk.exe")
 SETUP_EXE = os.path.join(APP_DIR, "QuantDesk-安装程序.exe")
 SRC = os.path.join(HERE, "Launcher.cs")
-REFS = ["/r:System.dll", "/r:System.Core.dll", "/r:System.Windows.Forms.dll", "/r:System.Drawing.dll"]
+REFS = ["/r:System.dll", "/r:System.Core.dll", "/r:System.Windows.Forms.dll",
+        "/r:System.Drawing.dll",
+        # 自动更新要用：ZipFile 解包（FileSystem）+ SHA256 校验（Cryptography 在 mscorlib 里，不用引）
+        "/r:System.IO.Compression.dll", "/r:System.IO.Compression.FileSystem.dll"]
 
 
 def compile_exe(out_path, define=None):

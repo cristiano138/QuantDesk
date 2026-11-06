@@ -27,6 +27,7 @@ import {
   type WatchItem,
 } from '../api/client'
 import HelpLink from '../components/HelpLink'
+import TradePanel from '../components/TradePanel'
 
 /** 行情来源在界面上只出现产品名，不出现内部代号。 */
 const FIN_SRC_CN: Record<string, string> = {
@@ -555,6 +556,8 @@ export default function MarketPage() {
           <h3>五档盘口</h3>
           <OrderBook tick={tick} note={snapNote} />
         </div>
+
+        <TradePanel symbol={symbol} />
       </div>
     </section>
   )

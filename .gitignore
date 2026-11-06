@@ -25,3 +25,4 @@ frontend/dist/
 
 # 本地自签名密钥：宪法第 7 条，口令类材料不入 git（文件本身留在磁盘上，升级覆盖安装要用它）
 QuantDesk-App/android/qd.keystore
+QuantDesk-App/update/

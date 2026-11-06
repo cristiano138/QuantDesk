@@ -245,11 +245,23 @@ input::placeholder{color:var(--muted)}
       <div class="h">在手机 App 中打开</div>
       <div class="links" id="openLinks"></div>
     </div>
+    <div class="card" id="updCard" style="display:none">
+      <div class="h">版本与更新 <span class="tag">本机 · <span id="updVer">—</span></span></div>
+      <div class="links">
+        <button class="mini" id="btnUpdCheck">立刻检查一次更新</button>
+        <button class="mini" id="btnUpdAuto">自动更新：开</button>
+      </div>
+      <div class="note" style="margin:8px 2px 0">
+        打开 App 时自动看一眼有没有新版本；新版本由这台手机自己下载，下载完先核对发布时留下的校验码，
+        对不上就不装。装不装由系统的安装弹窗决定，App 自己不会静默装。
+        关掉自动更新后，这个 App 不会为更新发出任何网络请求。
+      </div>
+    </div>
   </main>
 
   <main id="tab-sim" class="tab">
     <div class="card">
-      <div class="h">模拟账户 <span class="tag">虚拟资金 · 不涉及真实交易 · 仅 A 股</span></div>
+      <div class="h">模拟账户 <span class="tag">虚拟资金 · 不涉及真实交易 · A股/B股/港股</span></div>
       <div class="bigpx" id="simHead"></div>
       <div class="g" id="simGrid"></div>
       <div style="margin-top:10px"><button class="mini" id="simReset">重置账户</button></div>
@@ -294,11 +306,13 @@ input::placeholder{color:var(--muted)}
           <span>最新价<b id="osLast">—</b></span><span>昨收<b id="osPrev">—</b></span>
           <span>涨停<b class="up" id="osUp">—</b></span><span>跌停<b class="down" id="osDown">—</b></span>
         </div>
+        <div class="note" style="margin:8px 2px 0" id="osBandBasis">—</div>
       </div>
-      <div class="note" style="margin:0 2px 4px">委托价格（元）</div>
+      <div class="note" style="margin:0 2px 4px" id="osPriceHint">委托价格（元）</div>
       <input type="text" id="osPrice" inputmode="decimal">
       <div class="note" style="margin:10px 2px 4px">数量（股）</div>
       <input type="text" id="osVol" inputmode="numeric">
+      <div class="note" style="margin:4px 2px 0" id="osVolHint">100 股整数倍（整手）</div>
       <div class="pkTabs" id="osQuick"></div>
       <div class="readout" id="osEst" style="display:block">—</div>
       <div class="err" id="osErr" style="display:none;margin:10px 0 0"></div>
@@ -399,34 +413,149 @@ function emSecid(sym) {
 }
 function thsCode(sym) { return (isHK(sym) ? 'hk_' : 'hs_') + sym.slice(0, 6); }
 
-/* ---------------- 模拟盘：虚拟资金练习场（纯本机，无任何真实下单路径；仅 A 股） ---------------- */
+/* 装成 App 时原生外壳会调这个函数（网页里没人调，那一行就不出现）。
+   往回走只有一条窄门 qd:——它只认三条固定指令，页面拿不到任何原生能力。 */
+var _qdAuto = true;
+window.qdApp = function (ver, auto) {
+  _qdAuto = auto !== false;
+  var card = document.getElementById('updCard');
+  if (!card) return;
+  card.style.display = '';
+  document.getElementById('updVer').textContent = 'v' + (ver || '?');
+  document.getElementById('btnUpdAuto').textContent = '自动更新：' + (_qdAuto ? '开' : '关');
+};
+function qdGo(cmd) {
+  try { location.href = 'qd:' + cmd; } catch (e) {}
+}
 
-var SIM_KEY = 'qd.sim.v2';
+/* ---------------- 模拟盘：虚拟资金练习场（纯本机，无任何真实下单路径） ----------------
+   A股 / B股 / 港股都能模拟买：币种、费用、整手、T+1、涨跌停各按各自市场的规则来。
+   规则口径与电脑端 riskgate.py 一致，两边不各写一套。 */
+
+var SIM_KEY = 'qd.sim.v3';
+var CASH0 = 1000000;                    // 每个币种独立的虚拟额度（不做任何汇率换算）
+var CUR_UNIT = {CNY: '元', USD: '美元', HKD: '港币'};
+
+function cashInit() { return {CNY: 1000000, USD: 1000000, HKD: 1000000}; }
+   // ↑ 用函数而不是 var：state = {...sim: loadSim()...} 在本文件里比 var 赋值先跑，
+   //   函数声明会被提前，var 不会——写成 CASH0 时三个钱包会全变成 undefined（= 0 元）。
+
 function loadSim() {
-  try {
-    var s = JSON.parse(localStorage.getItem(SIM_KEY) || 'null');
-    if (s && typeof s.cash === 'number' && s.positions) return s;
-  } catch (e) {}
-  return {cash: 1000000, positions: {}, trades: []};
+  var s = null;
+  try { s = JSON.parse(localStorage.getItem(SIM_KEY) || 'null'); } catch (e) {}
+  if (s && s.cash && typeof s.cash === 'object' && s.positions) return s;
+  if (s && typeof s.cash === 'number') {          // v2 只有一个人民币钱包，其余币种补初始额度
+    s.cash = {CNY: s.cash, USD: 1000000, HKD: 1000000};
+    return s;
+  }
+  return {cash: cashInit(), positions: {}, trades: []};
 }
 function saveSim() { localStorage.setItem(SIM_KEY, JSON.stringify(state.sim)); }
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 function today8() { var d = new Date(); return '' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()); }
 function round2(v) { return Math.round((v + 1e-9) * 100) / 100; }
-/* 涨跌停幅度：创业板 300/301/302 与科创板 688/689 ±20%，其余主板 ±10% */
-function limitPctOf(sym) { return /^(300|301|302|688|689)/.test(sym) ? 0.20 : 0.10; }
-function simFees(amount, side) {
-  var commission = Math.max(amount * 2.5e-4, 5);
+function ceilYuan(v) { return Math.ceil(v - 1e-9); }     // 印花税「向上取整到元」
+
+/* 币种：沪B（900/901）以美元报价，深B（200/201）与港股以港币报价，其余人民币。
+   界面与钱包都按这个来，绝不把美元价当元数加总。 */
+function curOf(sym) {
+  var c = sym.slice(0, 3);
+  if (isHK(sym)) return 'HKD';
+  if (c === '900' || c === '901') return 'USD';
+  if (c === '200' || c === '201') return 'HKD';
+  return 'CNY';
+}
+function unitOf(sym) { return CUR_UNIT[curOf(sym)]; }
+function cashOf(sym) { return state.sim.cash[curOf(sym)] || 0; }
+function addCash(sym, v) {
+  var k = curOf(sym);
+  state.sim.cash[k] = round2((state.sim.cash[k] || 0) + v);
+}
+
+function decOf(sym) { return (isHK(sym) || curOf(sym) !== 'CNY') ? 3 : 2; }   // 报价小数位
+function tPlus1Of(sym) { return !isHK(sym); }            // 港股 T+0，当日买入当日可卖
+/* 数量规则：主板/创业板/北交所/B股 100 股整手；科创板 1 股起；
+   港股每手股数由发行人自定（100/200/500/1000/2000 都有），公开行情快照不给这个字段，
+   所以这里不校验，只在界面写明——用别的数字凑一个「看起来像整手」的校验是假规则。 */
+/* 委托量规则：数字与话术都跟后端 constants.lot_rule_text() 同一份，
+   界面和撮合各写一套时，用户在手机上看到的就是「这只买不了」。 */
+function qtyRuleOf(sym) {
+  if (isHK(sym)) return {min: 1, step: 1, check: false,
+                         text: '港股按 1 股递增模拟（实际下单须凑整到该股每手股数，100~2000 股不等）'};
+  if (/^(688|689)/.test(sym.slice(0, 3))) return {min: 200, step: 1, check: true,
+                         text: '科创板买入须 ≥200 股，其后 1 股递增'};
+  if (isBJ(sym)) return {min: 100, step: 1, check: true,
+                         text: '北交所买入须 ≥100 股，其后 1 股递增'};
+  return {min: 100, step: 100, check: true, text: '买入须为 100 股整数倍'};
+}
+
+/* 涨跌停区间（limitBand，不叫 bandOf——bandOf 在本页是逐笔成交额分层，同名会互相顶掉）：
+   优先用交易所给的官方值；给不出时按板块幅度推算；
+   新股（简称带 N/C）与港股不设涨跌幅——推算会算出一个假区间，所以直接不显示。 */
+function limitBand(sym, r) {
+  r = r || {};
+  var up = r.limit_up, down = r.limit_down;
+  if (up > 0 && down > 0 && up > down)
+    return {up: up, down: down, basis: '交易所官方涨跌停价'};
+  if (isHK(sym)) return {up: null, down: null, basis: '港股不设涨跌幅限制'};
+  var name = String(r.name || nameOf(sym) || '').trim();
+  if (nameSaysNew(name))
+    return {up: null, down: null,
+            basis: '简称带新上市标记（' + name.charAt(0) + '），上市初期不设涨跌幅限制'};
+  var prev = r.prev_close || 0;
+  if (!(prev > 0)) return {up: null, down: null, basis: '拿不到昨收，本单不做涨跌停区间校验'};
+  var pct = limitPctOf(sym, name);
+  // 数据自证：当日真实成交大幅越过推算区间（2 倍幅度以外），说明交易所今天就没设这个限制。
+  // 贴着区间沿的不算——除权日昨收口径差一点就会小幅越界，那种更可能是数据问题。
+  var hi = r.high || r.last || 0, lo = r.low || r.last || 0;
+  if (hi > prev * (1 + 2 * pct) + 0.005 || (lo > 0 && lo < prev * (1 - 2 * pct) - 0.005))
+    return {up: null, down: null,
+            basis: '当日价格已越过 ±' + (Math.round(pct * 200)) + '% 之外，按不设涨跌幅处理'};
+  return {up: round2(prev * (1 + pct)), down: round2(prev * (1 - pct)),
+          basis: '按昨收 ' + prev.toFixed(2) + ' × ±' + Math.round(pct * 100) + '% 推算'};
+}
+
+/* 只认「N/C + 汉字」：N=上市首日、C=上市后 2~5 日，注册制新股这几天没有涨跌幅。
+   认成「以 N 或 C 开头」会把 TCL科技 这类以字母开头的简称一起放开，那是放松规则。 */
+function nameSaysNew(name) {
+  return name.length > 1 && (name.charAt(0) === 'N' || name.charAt(0) === 'C')
+    && name.charAt(1) >= '\u4e00' && name.charAt(1) <= '\u9fff';
+}
+/* 幅度按板块：主板/B股 ±10%、创业板与科创板 ±20%、北交所 ±30%、ST ±5%（后端 constants.LIMIT_PCT） */
+function limitPctOf(sym, name) {
+  if ((name || '').toUpperCase().indexOf('ST') >= 0) return 0.05;
+  if (/^(300|301|302)/.test(sym.slice(0, 3))) return 0.20;
+  if (/^(688|689)/.test(sym.slice(0, 3))) return 0.20;
+  if (isBJ(sym)) return 0.30;
+  return 0.10;
+}
+
+function simFees(amount, side, sym) {
+  var u = unitOf(sym);
+  if (isHK(sym)) {
+    var stamp = ceilYuan(amount * 0.001);               // 0.1% 双向，向上取整到 1 港币
+    if (stamp < 1) stamp = 1;
+    var frc = round2(amount * 0.0000565);               // 联交所交易费
+    var afrc = round2(amount * 0.000027);               // 证监会征费
+    var settle = Math.min(100, Math.max(2, round2(amount * 0.00002)));   // 股份交收费
+    var commission = Math.max(amount * 2.5e-4, 5);
+    var total = round2(stamp + frc + afrc + settle + commission);
+    return {total: total, text: '印花税 ' + stamp + ' + 交易费 ' + frc + ' + 证会征费 ' + afrc +
+                                ' + 交收费 ' + settle + ' + 佣金 ' + commission.toFixed(2) + '（' + u + '）'};
+  }
+  var cm = Math.max(amount * 2.5e-4, 5);
   var transfer = amount * 1e-5;
-  var stamp = side === 'sell' ? amount * 5e-4 : 0;
-  return {total: round2(commission + transfer + stamp),
-          text: '佣金 ' + commission.toFixed(2) + ' + 过户 ' + transfer.toFixed(2) +
-                (stamp ? ' + 印花税 ' + stamp.toFixed(2) : '')};
+  var st = side === 'sell' ? amount * 5e-4 : 0;
+  var txt = '佣金 ' + cm.toFixed(2) + ' + 过户 ' + transfer.toFixed(2) +
+            (st ? ' + 印花税 ' + st.toFixed(2) : '');
+  if (curOf(sym) !== 'CNY') txt += '（B 股按 A 股同口径估算，币种为' + u + '）';
+  return {total: round2(cm + transfer + st), text: txt};
 }
 function simPos(sym) { return state.sim.positions[sym] || null; }
 function simVol(sym) { var p = simPos(sym); return p ? p.lots.reduce(function (a, l) { return a + l.vol; }, 0) : 0; }
 function simAvail(sym) {
   var p = simPos(sym); if (!p) return 0;
+  if (!tPlus1Of(sym)) return simVol(sym);               // 港股 T+0：当日买入当日就能卖
   var t = today8();
   return p.lots.reduce(function (a, l) { return a + (l.d < t ? l.vol : 0); }, 0);   // T+1：当日买不可卖
 }
@@ -437,11 +566,13 @@ function simAvgCost(sym) {
 }
 function simBuy(sym, price, vol) {
   var r = state.rows[sym] || {};
+  var u = unitOf(sym);
   var amount = round2(price * vol);
-  var fee = simFees(amount, 'buy');
-  if (amount + fee.total > state.sim.cash)
-    return {ok: false, msg: '资金不足：需 ' + (amount + fee.total).toFixed(2) + ' 元，可用 ' + state.sim.cash.toFixed(2) + ' 元'};
-  state.sim.cash = round2(state.sim.cash - amount - fee.total);
+  var fee = simFees(amount, 'buy', sym);
+  if (amount + fee.total > cashOf(sym))
+    return {ok: false, msg: '资金不足：需 ' + (amount + fee.total).toFixed(2) + ' ' + u +
+                            '，可用 ' + cashOf(sym).toFixed(2) + ' ' + u};
+  addCash(sym, -(amount + fee.total));
   var p = simPos(sym);
   if (!p) { p = {lots: []}; state.sim.positions[sym] = p; }
   p.lots.push({d: today8(), vol: vol, price: price});
@@ -458,10 +589,13 @@ function simBuy(sym, price, vol) {
 }
 function simSell(sym, price, vol) {
   var avail = simAvail(sym);
-  if (vol > avail) return {ok: false, msg: '可卖数量不足：T+1 规则，当日买入的今天不能卖（可卖 ' + avail + ' 股）'};
+  if (vol > avail)
+    return {ok: false, msg: tPlus1Of(sym)
+      ? '可卖数量不足：T+1 规则，当日买入的今天不能卖（可卖 ' + avail + ' 股）'
+      : '可卖数量不足（可卖 ' + avail + ' 股）'};
   var p = simPos(sym);
   var amount = round2(price * vol);
-  var fee = simFees(amount, 'sell');
+  var fee = simFees(amount, 'sell', sym);
   var need = vol, cost = 0, sold = 0;
   while (need > 0 && p.lots.length) {          // FIFO 先买先卖
     var lot = p.lots[0];
@@ -470,7 +604,7 @@ function simSell(sym, price, vol) {
     if (lot.vol <= 0) p.lots.shift();
   }
   var pnl = round2((price * sold - cost) - fee.total);
-  state.sim.cash = round2(state.sim.cash + amount - fee.total);
+  addCash(sym, amount - fee.total);
   if (!p.lots.length) delete state.sim.positions[sym];
   state.sim.trades.unshift({t: Date.now(), sym: sym, name: nameOf(sym) || '', side: 'sell',
                             price: price, vol: sold, fee: fee.total, pnl: pnl});
@@ -482,31 +616,39 @@ function simSell(sym, price, vol) {
 var _osCtx = null;   // {sym, side}
 
 function openOrder(sym, side) {
-  if (isHK(sym)) return;                        // 港股只看：模拟练习不开放（红线）
   _osCtx = {sym: sym, side: side};
   var r = state.rows[sym] || {};
+  var u = unitOf(sym);
   document.getElementById('osTitle').textContent = side === 'buy' ? '模拟买入' : '模拟卖出';
   document.getElementById('osStock').textContent = (nameOf(sym, r) || sym) + ' · ' + sym;
-  var prev = r.prev_close || r.last || 0;
-  var pct = limitPctOf(sym);
-  document.getElementById('osLast').textContent = r.last ? r.last.toFixed(2) : '—';
-  document.getElementById('osPrev').textContent = prev ? prev.toFixed(2) : '—';
-  document.getElementById('osUp').textContent = prev ? round2(prev * (1 + pct)).toFixed(2) : '—';
-  document.getElementById('osDown').textContent = prev ? round2(prev * (1 - pct)).toFixed(2) : '—';
-  document.getElementById('osPrice').value = r.last ? r.last.toFixed(2) : '';
-  document.getElementById('osVol').value = '100';
+  var band = limitBand(sym, r);
+  var dg = decOf(sym);
+  document.getElementById('osLast').textContent = r.last ? r.last.toFixed(dg) : '—';
+  document.getElementById('osPrev').textContent = r.prev_close ? r.prev_close.toFixed(dg) : '—';
+  document.getElementById('osUp').textContent = band.up != null ? band.up.toFixed(dg) : '不限';
+  document.getElementById('osDown').textContent = band.down != null ? band.down.toFixed(dg) : '不限';
+  document.getElementById('osBandBasis').textContent = band.basis + '　成交币种：' + u;
+  document.getElementById('osPrice').value = r.last ? r.last.toFixed(decOf(sym)) : '';
+  document.getElementById('osPriceHint').textContent = '委托价格（' + u + '）';
+  var q = qtyRuleOf(sym);
+  document.getElementById('osVol').value = String(Math.max(q.min, q.step));
+  document.getElementById('osVolHint').textContent = q.text;
   document.getElementById('osErr').style.display = 'none';
   var quick = document.getElementById('osQuick');
-  quick.innerHTML = (side === 'buy' ? [100, 1000, 5000] : [100, 500, simAvail(sym) || 0]).map(function (n) {
+  var base = q.step > 1 ? q.step : 100;
+  var preset = side === 'buy' ? [base, base * 10, base * 50] : [base, base * 5, simAvail(sym) || 0];
+  quick.innerHTML = preset.map(function (n) {
     return '<button data-osv="' + n + '">' + n + '</button>';
-  }).join('') + (side === 'buy' ? '<button data-osv="max">全仓</button>' : '<button data-osv="all">全部可用</button>');
+  }).join('') + (side === 'buy' ? '<button data-osv="max">全仓</button>'
+                                : '<button data-osv="all">全部可用</button>');
   Array.prototype.forEach.call(quick.querySelectorAll('[data-osv]'), function (b) {
     b.addEventListener('click', function () {
       var v = b.getAttribute('data-osv');
       var price = parseFloat(document.getElementById('osPrice').value) || 0;
       if (v === 'max') {
+        var fee0 = 1 + (isHK(sym) ? 0.0017 : 0.0004);       // 预估费率上限，宁可少算一点股数
         document.getElementById('osVol').value = price > 0 ?
-          Math.max(0, Math.floor(state.sim.cash / (price * 1.0004) / 100) * 100) : 0;
+          maxAffordable(sym, price, fee0) : 0;
       } else if (v === 'all') {
         document.getElementById('osVol').value = simAvail(sym);
       } else {
@@ -519,12 +661,45 @@ function openOrder(sym, side) {
   osEstimate();
 }
 
+/* 全仓：按整手/递增单位一路减到付得起为止（与后端 affordable_volume 同一条规则） */
+function maxAffordable(sym, price, feeRate) {
+  var q = qtyRuleOf(sym);
+  var vol = Math.floor(cashOf(sym) / (price * feeRate) / q.step) * q.step;
+  while (vol >= q.min &&
+         round2(price * vol) + simFees(round2(price * vol), 'buy', sym).total > cashOf(sym))
+    vol -= q.step;
+  return vol >= q.min ? vol : 0;
+}
+
+/* 这一条是下单路径上唯一的规则判据：预估与确认都调它，两边不可能出现「预估说行、确认没查」。
+   按钮 disabled 只是表现层——脚本、旧缓存页或一次竞态都可能点到禁用按钮，规则不许跟着一起被绕过。 */
+function orderReject(sym, side, price, vol) {
+  var u = unitOf(sym);
+  var r = state.rows[sym] || {};
+  var band = limitBand(sym, r);
+  var q = qtyRuleOf(sym);
+  var dg = decOf(sym);
+  var amount = round2(price * vol);
+  var fee = simFees(amount, side, sym);
+  if (band.up != null && band.down != null && (price > band.up + 1e-9 || price < band.down - 1e-9))
+    return '委托价超出涨跌停区间 [' + band.down.toFixed(dg) + ', ' + band.up.toFixed(dg) + ']（' + band.basis + '）';
+  if (vol < q.min) return '数量不足：' + q.text;
+  if (q.check && vol % q.step !== 0) return '数量须为 ' + q.step + ' 股整数倍（' + q.text + '）';
+  if (side === 'sell' && vol > simAvail(sym))
+    return tPlus1Of(sym) ? '可卖不足：当日买入 T+1（可卖 ' + simAvail(sym) + '）'
+                        : '可卖不足（可卖 ' + simAvail(sym) + '）';
+  if (side === 'buy' && amount + fee.total > cashOf(sym))
+    return '资金不足（可用 ' + cashOf(sym).toFixed(2) + ' ' + u + '）';
+  return '';
+}
+
 function osEstimate() {
   if (!_osCtx) return;
+  var sym = _osCtx.sym, side = _osCtx.side, u = unitOf(sym);
   var price = parseFloat(document.getElementById('osPrice').value) || 0;
   var vol = parseInt(document.getElementById('osVol').value, 10) || 0;
   var amount = round2(price * vol);
-  var fee = simFees(amount, _osCtx.side);
+  var fee = simFees(amount, side, sym);
   var est = document.getElementById('osEst');
   var btn = document.getElementById('osConfirm');
   if (price <= 0 || vol <= 0) {
@@ -532,29 +707,30 @@ function osEstimate() {
     btn.disabled = true;
     return;
   }
-  var r = state.rows[_osCtx.sym] || {};
-  var prev = r.prev_close || 0;
-  var lim = limitPctOf(_osCtx.sym);
-  var up = round2(prev * (1 + lim)), down = round2(prev * (1 - lim));
-  var bad = '';
-  if (prev > 0 && (price > up + 1e-9 || price < down - 1e-9))
-    bad = '委托价超出涨跌停区间 [' + down.toFixed(2) + ', ' + up.toFixed(2) + ']';
-  if (_osCtx.side === 'buy' && vol % 100 !== 0) bad = bad || '买入数量须为 100 股整数倍（整手）';
-  if (_osCtx.side === 'sell' && vol > simAvail(_osCtx.sym)) bad = bad || '可卖不足：当日买入 T+1（可卖 ' + simAvail(_osCtx.sym) + '）';
-  if (_osCtx.side === 'buy' && amount + fee.total > state.sim.cash) bad = bad || '资金不足（可用 ' + state.sim.cash.toFixed(2) + ' 元）';
+  var dg = decOf(sym);
+  var bad = orderReject(sym, side, price, vol);
   document.getElementById('osErr').style.display = bad ? 'block' : 'none';
   document.getElementById('osErr').textContent = bad;
   btn.disabled = !!bad;
-  est.innerHTML = '金额 <b>' + amount.toFixed(2) + '</b> 元　费用 <b>' + fee.total.toFixed(2) + '</b> 元（' + fee.text + '）<br>' +
-    (_osCtx.side === 'buy' ? '总支出 <b class="up">' + (amount + fee.total).toFixed(2) + '</b> 元 · 成交后当日不可卖（T+1）'
-                           : '总入账 <b class="down">' + (amount - fee.total).toFixed(2) + '</b> 元');
+  est.innerHTML = '金额 <b>' + amount.toFixed(dg) + '</b> ' + u + '　费用 <b>' + fee.total.toFixed(2) +
+    '</b> ' + u + '（' + fee.text + '）<br>' +
+    (side === 'buy'
+      ? '总支出 <b class="up">' + (amount + fee.total).toFixed(2) + '</b> ' + u + '　' +
+        (tPlus1Of(sym) ? '成交后当日不可卖（T+1）' : '港股 T+0：当日买入当日可卖')
+      : '总入账 <b class="down">' + (amount - fee.total).toFixed(2) + '</b> ' + u);
 }
-
 function osConfirm() {
   if (!_osCtx) return;
   var price = parseFloat(document.getElementById('osPrice').value) || 0;
   var vol = parseInt(document.getElementById('osVol').value, 10) || 0;
   var side = _osCtx.side, sym = _osCtx.sym;
+  var bad = orderReject(sym, side, price, vol);
+  if (bad) {
+    var box = document.getElementById('osErr');
+    box.style.display = 'block'; box.textContent = bad;
+    document.getElementById('osConfirm').disabled = true;
+    return;
+  }
   var res = side === 'buy' ? simBuy(sym, price, vol) : simSell(sym, price, vol);
   if (!res.ok) {
     var err = document.getElementById('osErr');
@@ -562,34 +738,43 @@ function osConfirm() {
     return;
   }
   document.getElementById('orderSheet').classList.remove('on');
-  setConnMsg('模拟' + (side === 'buy' ? '买入' : '卖出') + '成交：' + sym + ' ' + vol +
-             ' 股 @ ' + price.toFixed(2) + '（虚拟资金）');
+  setConnMsg('模拟' + (side === 'buy' ? '买入' : '卖出') + '成交：' + (nameOf(sym) || sym) + ' ' + vol +
+             ' 股 @ ' + price.toFixed(decOf(sym)) + '（虚拟' + unitOf(sym) + '）');
   renderSim(); renderList();
   _osCtx = null;
 }
 
+var CURS = ['CNY', 'USD', 'HKD'];
 function renderSim() {
   var s = state.sim;
   var syms = Object.keys(s.positions);
-  var mv = 0, todayPL = 0, hasPx = false;
+  var mv = {}, pl = {}, px = {}, realized = {};
+  CURS.forEach(function (k) { mv[k] = 0; pl[k] = 0; px[k] = false; realized[k] = 0; });
   syms.forEach(function (sym) {
-    var vol = simVol(sym);
-    var row = state.rows[sym];
+    var k = curOf(sym), vol = simVol(sym), row = state.rows[sym];
     var last = row && row.last > 0 ? row.last : simAvgCost(sym);
-    mv += vol * last;
-    if (row && row.prev_close > 0) { todayPL += vol * (last - row.prev_close); hasPx = true; }
+    mv[k] += vol * last;
+    if (row && row.prev_close > 0) { pl[k] += vol * (last - row.prev_close); px[k] = true; }
   });
-  var total = s.cash + mv;
-  var realized = s.trades.reduce(function (a, t) { return a + (t.pnl || 0); }, 0);
+  s.trades.forEach(function (t) { realized[curOf(t.sym)] += (t.pnl || 0); });
+  // 头条看「动过的那个钱包」：只交易过 A 股时就是人民币，交易过港股才会切到港币
+  var active = CURS.filter(function (k) { return mv[k] > 0 || (s.cash[k] || 0) !== CASH0; });
+  var main = active.length ? active[0] : 'CNY';
+  var unit = CUR_UNIT[main];
+  var total = (s.cash[main] || 0) + mv[main];
   document.getElementById('simHead').innerHTML =
-    '<div><div class="nm">总资产（虚拟）</div><div class="cd">初始 100 万 · 本机保存</div></div>' +
-    '<div class="pv"><div class="p ' + cls(hasPx ? todayPL : null) + '">' + total.toFixed(2) + '</div>' +
-    '<div class="c ' + cls(hasPx ? todayPL : null) + '">今日 ' + (hasPx ? (todayPL > 0 ? '+' : '') + todayPL.toFixed(2) : '—') + '</div></div>';
-  document.getElementById('simGrid').innerHTML =
-    '<span class="w2">可用现金<b>' + s.cash.toFixed(2) + '</b></span>' +
-    '<span class="w2">持仓市值<b>' + mv.toFixed(2) + '</b></span>' +
+    '<div><div class="nm">总资产（虚拟 · ' + unit + '）</div><div class="cd">每币种各 100 万额度 · 本机保存 · 各算各的不相加</div></div>' +
+    '<div class="pv"><div class="p ' + cls(px[main] ? pl[main] : null) + '">' + total.toFixed(2) + '</div>' +
+    '<div class="c ' + cls(px[main] ? pl[main] : null) + '">今日 ' + (px[main] ? (pl[main] > 0 ? '+' : '') + pl[main].toFixed(2) : '—') + '</div></div>';
+  document.getElementById('simGrid').innerHTML = CURS.map(function (k) {
+    return '<span class="w2">' + CUR_UNIT[k] + '现金<b>' + (s.cash[k] || 0).toFixed(2) + '</b></span>' +
+           '<span class="w2">' + CUR_UNIT[k] + '持仓市值<b>' + mv[k].toFixed(2) + '</b></span>';
+  }).join('') +
     '<span class="w2">持仓数<b>' + syms.length + '</b></span>' +
-    '<span class="w2">累计已实现盈亏<b class="' + cls(realized) + '">' + (realized > 0 ? '+' : '') + realized.toFixed(2) + '</b></span>';
+    CURS.filter(function (k) { return realized[k] !== 0; }).map(function (k) {
+      return '<span class="w2">已实现盈亏（' + CUR_UNIT[k] + '）<b class="' + cls(realized[k]) + '">' +
+             (realized[k] > 0 ? '+' : '') + realized[k].toFixed(2) + '</b></span>';
+    }).join('');
 
   var pos = document.getElementById('simPos');
   if (!syms.length) {
@@ -602,7 +787,8 @@ function renderSim() {
       var last = row && row.last > 0 ? row.last : null;
       var cost = simAvgCost(sym);
       var pnl = last != null ? (last - cost) * vol : null;
-      html += '<tr><td>' + esc(nameOf(sym) || sym) + '<span style="color:var(--muted);font-size:11px"> ' + sym + '</span></td>' +
+      html += '<tr><td>' + esc(nameOf(sym) || sym) + '<span style="color:var(--muted);font-size:11px"> ' + sym +
+        (curOf(sym) === 'CNY' ? '' : ' · ' + unitOf(sym)) + '</span></td>' +
         '<td>' + vol + ' (' + avail + ')</td><td>' + cost.toFixed(2) + '</td>' +
         '<td>' + (last != null ? last.toFixed(2) : '—') + '</td>' +
         '<td class="' + cls(pnl) + '">' + (pnl == null ? '—' : (pnl > 0 ? '+' : '') + pnl.toFixed(2)) + '</td>' +
@@ -637,7 +823,7 @@ function renderSim() {
 document.getElementById('quantNote').innerHTML =
   '<b>量化 = 把买卖规则写成程序</b>：什么时候买、买多少、什么时候卖，全部写成明确规则，交给程序执行——依据是数据，不是感觉。<br><br>' +
   '一套量化系统的流水线：<b>数据 → 策略 → 回测 → 模拟 → 实盘 → 复盘</b>。回测拿历史 K 线把规则重演一遍看成绩；模拟盘用实时行情空转验证；实盘每一单都过风控和人工确认。<br><br>' +
-  '你眼前的模拟盘就是「模拟」这一步的练习场：行情是真的、费用规则是真的（佣金最低 5 元、印花税卖出 0.05%、T+1），钱是假的。<br><br>' +
+  '你眼前的模拟盘就是「模拟」这一步的练习场：行情是真的、费用与交易规则是真的（A 股佣金最低 5 元、印花税卖出 0.05%、T+1；B 股按美元/港币计价；港股印花税 0.1% 双边、T+0、不设涨跌幅），钱是假的。<br><br>' +
   '<b>三句实话</b>：回测好看不等于未来赚钱（最容易犯的是过拟合）；量化不等于自动赚钱，规则不行程序照样亏；数据必须准——差一格结论就反。本页只做练习，不构成任何投资建议。';
 
 /* ---------------- 指数条 / 板块排行 / 数据体检 ---------------- */
@@ -1702,17 +1888,16 @@ function renderList() {
         '<span>最高<b class="' + (r.high ? 'up' : '') + '">' + (r.high ? r.high.toFixed(digits) : '—') + '</b></span>' +
         '<span>最低<b class="' + (r.low ? 'down' : '') + '">' + (r.low ? r.low.toFixed(digits) : '—') + '</b></span>' +
         '<span class="w2">成交量<b>' + fmtVol(r.volume, r.volume_unit) + '</b></span>' +
-        '<span class="w2">成交额<b>' + fmtAmt(r.amount) + (r.amount ? ' 元' : '') + '</b></span>' +
+        '<span class="w2">成交额<b>' + fmtAmt(r.amount) + (r.amount ? ' ' + unitOf(sym) : '') + '</b></span>' +
         '<span class="w2">外盘·主动买<b class="up">' + (r.outer == null ? '—' : fmtVol(r.outer, r.volume_unit)) +
           (buyRatio != null ? ' <span style="font-size:12px;color:var(--muted)">' + buyRatio.toFixed(1) + '%</span>' : '') + '</b></span>' +
         '<span class="w2">内盘·主动卖<b class="down">' + (r.inner == null ? '—' : fmtVol(r.inner, r.volume_unit)) + '</b></span>' +
       '</div>' +
       '<div style="display:flex;gap:8px;margin-top:12px">' +
       '<button class="go" style="flex:1" data-go="' + sym + '">看盘口 · 分时 · 日K</button>' +
-      (isHK(sym) ? '' :
-        '<button class="mini" style="border-color:#5a2a2a;color:var(--up)" data-buy="' + sym + '">模拟买</button>' +
-        '<button class="mini" style="border-color:#1d4a35;color:var(--down)" data-sell="' + sym + '"' +
-        (simAvail(sym) > 0 ? '' : ' disabled') + '>模拟卖</button>') + '</div>' +
+      '<button class="mini" style="border-color:#5a2a2a;color:var(--up)" data-buy="' + sym + '">模拟买</button>' +
+      '<button class="mini" style="border-color:#1d4a35;color:var(--down)" data-sell="' + sym + '"' +
+      (simAvail(sym) > 0 ? '' : ' disabled') + '>模拟卖</button></div>' +
       '</div>');
   });
   if (!state.pool.length) {
@@ -1859,7 +2044,7 @@ function renderFlowOv(sym) {
     '<span class="w2">外盘·主动买<b class="up">' + (r.outer == null ? '—' : fmtVol(r.outer, unit)) + '</b></span>' +
     '<span class="w2">内盘·主动卖<b class="down">' + (r.inner == null ? '—' : fmtVol(r.inner, unit)) + '</b></span>' +
     '<span class="w2">主动买占比<b>' + (pct == null ? '—' : pct.toFixed(1) + '%') + '</b></span>' +
-    '<span class="w2">逐笔净额<b class="' + cls(net) + '">' + (net == null ? '—' : fmtAmt(net) + ' 元') + '</b></span>' +
+    '<span class="w2">逐笔净额<b class="' + cls(net) + '">' + (net == null ? '—' : fmtAmt(net) + ' ' + unitOf(sym)) + '</b></span>' +
     '</div>' +
     (diff == null ? '' : '<div class="note" style="margin:8px 2px 0">逐笔合计 ' + fmtVol(acc.total, '股') +
       '，与官方总量差 ' + (diff > 0 ? '+' : '') + diff.toFixed(2) + '%（含盘后成交）</div>');
@@ -2244,6 +2429,12 @@ function bind() {
   });
   document.getElementById('fab').addEventListener('click', openSheet);
   document.getElementById('btnPick').addEventListener('click', openSheet);
+  document.getElementById('btnUpdCheck').addEventListener('click', function () { qdGo('check-update'); });
+  document.getElementById('btnUpdAuto').addEventListener('click', function () {
+    _qdAuto = !_qdAuto;
+    this.textContent = '自动更新：' + (_qdAuto ? '开' : '关');
+    qdGo('auto-update=' + (_qdAuto ? 'on' : 'off'));
+  });
   document.getElementById('osClose').addEventListener('click', function () {
     document.getElementById('orderSheet').classList.remove('on'); _osCtx = null;
   });
@@ -2271,11 +2462,11 @@ function bind() {
   document.getElementById('simReset').addEventListener('click', function () {
     var rb = document.getElementById('simReset');
     if (rb.getAttribute('data-armed') === '1') {
-      state.sim = {cash: 1000000, positions: {}, trades: []};
+      state.sim = {cash: cashInit(), positions: {}, trades: []};
       saveSim();
       rb.setAttribute('data-armed', '0');
       renderSim(); renderList();
-      setConnMsg('模拟账户已重置为初始 100 万（虚拟）');
+      setConnMsg('模拟账户已重置：人民币 / 美元 / 港币 各 100 万（虚拟）');
     } else {
       rb.setAttribute('data-armed', '1');
       renderSim();

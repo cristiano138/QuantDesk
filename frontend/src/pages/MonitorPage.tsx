@@ -10,6 +10,7 @@ import {
   type ReconcileDiff,
 } from '../api/client'
 import HelpLink from '../components/HelpLink'
+import TradePanel from '../components/TradePanel'
 
 const DIFF_KIND_CN: Record<string, string> = {
   order_missing_local: '券商有委托、本地无记录',
@@ -257,6 +258,8 @@ export default function MonitorPage() {
 
   // 撤单/确认失败必须上屏（钱相关动作不静默），但只作为一条提示，不影响轮询继续刷新
   const [actionErr, setActionErr] = useState('')
+  const [tradeInput, setTradeInput] = useState('')
+  const [tradeSymbol, setTradeSymbol] = useState('')
 
   const cancel = async (orderId: string) => {
     setActionErr('')
@@ -322,6 +325,42 @@ export default function MonitorPage() {
           账户资金读取失败：{account.error}（连不上时上面显示 —，不会当作 0 元）
         </p>
       )}
+
+      <div className="card">
+        <h3>手动下一笔</h3>
+        <p className="sub-note">
+          填代码打开下单框——A 股、B 股、港股、科创板、北交所都能模拟买卖；
+          能不能成交由服务端规则判定，被拒绝时这里会原样给出原因。
+        </p>
+        <div className="watch-add">
+          <input
+            placeholder="如 600000.SH / 00700.HK / 900921"
+            value={tradeInput}
+            onChange={(e) => setTradeInput(e.target.value)}
+          />
+          <button
+            onClick={() => {
+              const v = tradeInput.trim().toUpperCase()
+              if (v) setTradeSymbol(v)
+            }}
+          >
+            打开下单框
+          </button>
+        </div>
+        {tradeSymbol && (
+          <p className="sub-note">
+            当前下单标的：<b>{tradeSymbol}</b>
+            <button
+              className="mini"
+              style={{ marginLeft: 8 }}
+              onClick={() => { setTradeSymbol(''); setTradeInput('') }}
+            >
+              关闭
+            </button>
+          </p>
+        )}
+      </div>
+      {tradeSymbol && <TradePanel symbol={tradeSymbol} compact />}
 
       <div className="card">
         <h3>持仓（{positions.data?.length ?? 0}）</h3>

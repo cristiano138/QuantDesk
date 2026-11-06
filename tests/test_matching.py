@@ -6,6 +6,7 @@ from quantdesk.core.enums import OrderType, Side
 from quantdesk.core.models import Bar, Order, Tick, Trade
 from quantdesk.engine.matching import (
     FeeCalculator,
+    affordable_volume,
     MatchConfig,
     PositionBook,
     apply_fill,
@@ -283,3 +284,86 @@ def test_t1_sell_cannot_exceed_available():
     book.apply_trade(sell)
     assert book.position("600000.SH") is None   # 清仓后无持仓记录
     assert book.available("600000.SH") == 0
+
+
+# ---------- 港股口径：真实费率 + T+0（2026-11-06 起模拟盘放开港股） ----------
+
+def mk_hk_tick(last=300.0) -> Tick:
+    return Tick(symbol="00700.HK", dt=datetime(2026, 11, 6, 9, 31), last=last, open=last,
+                high=last, low=last, volume=1e6, amount=last * 1e6,
+                bids=[(last - 0.2, 500)], asks=[(last + 0.2, 500)])
+
+
+def test_hk_fee_components_are_not_the_a_share_ones():
+    """港股印花税 0.1% 双边（向上取整到元）+ 交易费 + 征费 + 交收费（2~100 封顶）。"""
+    f = FeeCalculator()
+    assert f.hk_fee(1000.0) == 3.09          # 1 + 0.06 + 0.03 + 2（交收费不足 2 按 2）
+    assert f.hk_fee(100_000.0) == 110.35     # 100 + 5.65 + 2.7 + 2
+    assert f.hk_fee(1_000_000.0) == 1103.5   # 1000 + 56.5 + 27 + 20
+    assert f.hk_fee(6_000_000.0) == 6601.0   # 交收费封顶 100
+    assert f.hk_fee(0.0) == 0.0
+
+
+def test_fee_dispatches_by_market():
+    """同一笔金额，港股按港规、A 股按 A 规——只按 side 分会把港股费用算成 1/3。"""
+    f = FeeCalculator()
+    assert f.fee("buy", 100_000.0, "00700.HK") == 110.35
+    assert f.fee("buy", 100_000.0, "600000.SH") == 35.0      # 佣金 25 + 过户 10
+    assert f.fee("sell", 100_000.0, "600000.SH") == 85.0     # 再加印花税 50
+    assert f.fee("buy", 100_000.0) == 35.0                   # 不给 symbol 仍是 A 股口径（老行为）
+
+
+def test_hk_fill_uses_hk_fee():
+    r = match_on_tick(Order(order_id="H1", symbol="00700.HK", side=Side.BUY, price=300.0,
+                            volume=100, order_type=OrderType.LIMIT.value, status="submitted"),
+                      mk_hk_tick(300.0))
+    assert r.filled and r.fill_price == 300.0
+    assert r.fee == FeeCalculator().hk_fee(30_000.0)
+
+
+def test_hk_position_is_sellable_same_day():
+    """港股 T+0：当日买入的 available 立刻可用；A 股当日买入仍必须冻住。"""
+    book = PositionBook()
+    book.apply_trade(Trade(trade_id="H1", order_id="O1", symbol="00700.HK", side=Side.BUY,
+                           price=300.0, volume=100, amount=30_000.0, traded_at=1))
+    assert book.available("00700.HK") == 100
+    book.apply_trade(Trade(trade_id="A1", order_id="O2", symbol="600000.SH", side=Side.BUY,
+                           price=10.0, volume=100, amount=1000.0, traded_at=2))
+    assert book.available("600000.SH") == 0
+    book.on_new_trading_day()
+    assert book.available("600000.SH") == 100
+
+
+def test_b_share_position_follows_t_plus_1():
+    """B 股是 A 股市场的 B 股，交收和主板一样 T+1（不是港币就以为是 T+0）。"""
+    book = PositionBook()
+    book.apply_trade(Trade(trade_id="B1", order_id="O1", symbol="900921.SH", side=Side.BUY,
+                           price=0.32, volume=100, amount=32.0, traded_at=1))
+    assert book.available("900921.SH") == 0
+
+
+def test_affordable_volume_step_follows_the_market():
+    """可负担量的递增单位：主板/创业 100 股一档，科创/北交/港股 1 股一档。"""
+    f = FeeCalculator()
+    assert affordable_volume(1_000_000.0, 419.4, 1, f, symbol="00700.HK") == 1
+    assert affordable_volume(1_000_000.0, 660.0, 201, f, symbol="688836.SH") == 201
+    assert affordable_volume(1_000_000.0, 10.0, 250, f, symbol="600000.SH") == 200
+    assert affordable_volume(1_000.0, 10.0, 100, f, symbol="600000.SH") == 0    # 一手都买不起
+    assert affordable_volume(1_000_000.0, 10.0, 250, f) == 200                   # 不给代码按主板
+
+
+def test_affordable_volume_uses_market_fees():
+    """验资必须按市场各自的费率算：港股四项加起来是 A 股口径的三倍多。
+
+    用错费率的后果不是报错而是「多给量」——A 股 100 股 @300 实需 30010.50，
+    港股同一笔要 30034.50；给 30020 元现金时 A 股刚好一整手，港股连一整手都不够，
+    只能按 1 股递增缩到 99（主板 100 股一档，缩不出半档就是买不起，不会退成 99 股）。
+    """
+    f = FeeCalculator()
+    assert affordable_volume(30001.0, 300.0, 100, f, symbol="00700.HK") == 99
+    assert affordable_volume(30001.0, 300.0, 100, f, symbol="600000.SH") == 0
+    assert affordable_volume(30020.0, 300.0, 100, f, symbol="600000.SH") == 100
+    assert affordable_volume(30020.0, 300.0, 100, f, symbol="00700.HK") == 99
+    assert affordable_volume(30100.0, 300.0, 100, f, symbol="00700.HK") == 100
+    # 同样这笔钱，按 A 股费率给港股算就会放行 100 股——那 14 元差额是凭空多出来的购买力
+    assert 30034.50 - 30010.50 > 20.0

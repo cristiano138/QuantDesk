@@ -7,16 +7,34 @@
 
 from __future__ import annotations
 
+import logging
 import threading
+from datetime import datetime
 
 from quantdesk.adapters.brokers.paper_broker import PaperBroker
 from quantdesk.core.enums import OrderStatus, OrderType, Side
 from quantdesk.core.events import SYSTEM_BUS, EventBus
-from quantdesk.core.models import Account, Order, Position, Trade
+from quantdesk.core.models import Account, Order, Position, Tick, Trade
+from quantdesk.core.symbols import normalize
+from quantdesk.core.timeutil import now_ms
 from quantdesk.engine.riskgate import RiskGate
 from quantdesk.store import repo
 
+log = logging.getLogger(__name__)
+
 __all__ = ["TradingService", "get_trading_service"]
+
+_QUOTE_FRESH_S = 60.0    # 手上这份行情多久之内还够用（超过就当没有，当场补一次）
+
+
+def _age_seconds(dt: datetime) -> float:
+    """快照距今多少秒。测试里的 tick 常是 naive 时间，按本机时区补齐再比。"""
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return max((datetime.now().astimezone() - dt).total_seconds(), 0.0)
+    except Exception:                         # noqa: BLE001 判不出年龄就当还新，不为难用户多打一次接口
+        return 0.0
 
 
 class TradingService:
@@ -36,7 +54,8 @@ class TradingService:
                                  event_bus=self.bus)
         self.gate = RiskGate(paper_broker=self.paper, live_broker=None,
                              live_provider=self.hub.live_broker if self.hub else None,
-                             settings=settings, db_path=db_path, event_bus=self.bus)
+                             settings=settings, db_path=db_path, event_bus=self.bus,
+                             quote_provider=self._quote_row)
         self._started = False
         self._lock = threading.RLock()
 
@@ -76,13 +95,52 @@ class TradingService:
         return self.gate.reject(order_id)
 
     # ---------- 下单/撤单 ----------
+    def _quote_row(self, symbol: str) -> dict:
+        """下单/校验要用的行情快照（昨收、交易所涨跌停价、现价、简称）。
+
+        走只读盯盘服务：它自带 TTL 缓存与逐标的取数，不重复打公开接口。
+        取不到就回空 dict，RiskGate 自己按「无从判定」处理（模拟盘放行 + LOG，实盘 fail-closed）。
+        """
+        from quantdesk.services.watch import get_watch_service
+
+        try:
+            return get_watch_service().live_row(symbol) or {}
+        except Exception as e:                         # noqa: BLE001 行情不可用不应让下单崩掉
+            log.info("取行情快照失败 %s: %s", symbol, e)
+            return {}
+
+    def _ensure_quote(self, symbol: str) -> None:
+        """保证模拟盘手上有这只标的的可用行情，然后委托才可能当场撮合。
+
+        实时泵只推它订阅过的标的，休市时更不推。过去这只票不在订阅里，限价单就会
+        一直挂在簿上不动——用户体感是「这只买不了」，其实是没人喂行情。手动下单是
+        用户主动动作（宪法第 11 条③里允许外呼的那一类），当场取一次快照喂进去。
+        """
+        tick = self.paper.latest_tick(symbol)
+        if tick is not None and _age_seconds(tick.dt) < _QUOTE_FRESH_S:
+            return
+        row = self._quote_row(symbol)
+        last = float(row.get("last") or 0)
+        if last <= 0:
+            return
+        ts = int(row.get("ts_ms") or now_ms())
+        self.paper.on_tick(Tick(
+            symbol=symbol, dt=datetime.fromtimestamp(ts / 1000).astimezone(),
+            last=last, open=float(row.get("open") or 0), high=float(row.get("high") or 0),
+            low=float(row.get("low") or 0), volume=float(row.get("volume") or 0),
+            amount=float(row.get("amount") or 0),
+            bids=[tuple(x) for x in (row.get("bids") or [])],
+            asks=[tuple(x) for x in (row.get("asks") or [])]))
+
     def place_order(self, symbol: str, side: str, volume: int,
                     price: float | None = None, order_type: str = "limit",
                     strategy_id: str = "manual") -> Order:
         self.start()
+        sym = normalize(symbol)
+        self._ensure_quote(sym)
         intent = Order(
             order_id=self.gate.new_order_id(),
-            symbol=symbol,
+            symbol=sym,
             side=Side(side),
             price=float(price) if price is not None else 0.0,
             volume=int(volume),
@@ -96,6 +154,14 @@ class TradingService:
         self.start()
         broker = self._active_broker()
         return bool(broker.cancel_order(order_id))
+
+    def order_rules(self, symbol: str) -> dict:
+        """下单框要显示的那张「规则卡」：板块/币种/最小委托量/价格区间/能不能买。
+
+        判据一份都不写在这里——全部由 RiskGate 出，与真正执行的那套同源。
+        """
+        self.start()
+        return self.gate.rule_card(symbol)
 
     # ---------- 查询 ----------
     def get_order(self, order_id: str) -> Order | None:

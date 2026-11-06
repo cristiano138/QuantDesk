@@ -6,8 +6,10 @@ from quantdesk.core.enums import Board
 from quantdesk.core.errors import SymbolError
 from quantdesk.core.symbols import (
     board_of,
+    currency_of,
     from_internal,
     is_st,
+    normalize,
     set_st_names,
     to_internal,
 )
@@ -154,3 +156,34 @@ def test_board_of_unknown_prefix():
 def test_board_of_malformed():
     with pytest.raises(SymbolError):
         board_of("600000")  # 缺后缀
+
+
+# ---------- B 股 / 新增代码段：曾经这些代码在交易链路上直接抛「无法识别市场前缀」 ----------
+
+def test_b_share_codes_map_to_their_exchange():
+    assert normalize("900921") == "900921.SH"
+    assert normalize("200725") == "200725.SZ"
+    assert normalize("sh900921") == "900921.SH"
+    assert board_of("900921.SH") is Board.MAIN
+    assert board_of("200725.SZ") is Board.MAIN
+
+
+def test_b_share_currency():
+    assert currency_of("900921.SH") == "USD"      # 沪B 以美元报价
+    assert currency_of("200725.SZ") == "HKD"      # 深B 以港币报价
+    assert currency_of("600000.SH") == "CNY"
+    assert currency_of("00700.HK") == "HKD"
+
+
+def test_new_code_segments():
+    """创业板新增段 30xxxx、北交所新增段 92xxxx 都要认，别用「猜不到就拒」。"""
+    assert board_of("302132.SZ") is Board.GEM
+    assert board_of("920770.BJ") is Board.BSE
+    assert board_of("689009.SH") is Board.STAR
+    assert normalize("920770") == "920770.BJ"
+
+
+def test_source_roundtrip_for_b_shares():
+    assert from_internal("900921.SH", "tx") == "sh900921"
+    assert from_internal("200725.SZ", "em") == "0.200725"
+    assert to_internal("200725", "akshare") == "200725.SZ"

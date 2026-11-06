@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.quantdesk.watch"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.2">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 新版本 APK 下载完要交给系统安装：Android 8 起这个权限是「能不能弹出安装页」的前置 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="false"
@@ -25,5 +27,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 只递出刚下载好、且校验码核对过的那一个安装包（content://，不给 file:// 路径） -->
+        <provider
+            android:name="com.quantdesk.watch.UpdateFileProvider"
+            android:authorities="com.quantdesk.watch.file"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

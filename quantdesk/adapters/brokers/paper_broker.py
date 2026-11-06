@@ -45,6 +45,21 @@ def _ms_to_local_date(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone().strftime("%Y-%m-%d")
 
 
+def _is_today_quote(dt: datetime) -> bool:
+    """这份行情是不是今天取的。
+
+    模拟撮合只肯认当天的价：收盘后（或隔夜重启）缓存里那份 tick 是**昨收/昨日收盘**，
+    拿它当现价撮合，界面就会出现「昨天 10.00 元买入、今天开盘 9.20」这种凭空多出来
+    或凭空消失的盈亏。naive 时间戳按本机墙钟理解，与 paper 回放口径一致。
+    """
+    try:
+        today = datetime.now().astimezone().date()
+        d = dt if dt.tzinfo else dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return d.astimezone().date() >= today
+    except Exception:                                  # noqa: BLE001 判不出日期就当不可用
+        return False
+
+
 class PaperBroker(BrokerAdapter):
     """模拟撮合：tick 撞价复用 engine/matching；状态持久化与实盘同表。"""
 
@@ -91,6 +106,15 @@ class PaperBroker(BrokerAdapter):
             self._latest[tick.symbol] = tick
             self._match_resting(tick)
 
+    def latest_tick(self, symbol: str) -> Tick | None:
+        """当前用来撮合的最新快照（没有就返回 None，不编一个）。
+
+        下单编排要先知道「手上这只票的行情过没过期」——挂单只有行情到达才会重撞，
+        没行情时委托会一直不成交，用户看到的就不是「拒绝」而是「点了没反应」。
+        """
+        with self._lock:
+            return self._latest.get(symbol)
+
     # ---------- 交易 ----------
     def place_order(self, order: Order) -> Order:
         with self._lock:
@@ -110,12 +134,21 @@ class PaperBroker(BrokerAdapter):
 
         repo.upsert_order(o, db_path=self.db_path)      # 先落库
         tick = self._latest.get(o.symbol)
-        if tick is None and o.order_type == OrderType.MARKET:
-            o = replace(o, status=OrderStatus.REJECTED,
-                        message="无最新行情，市价单无法撮合（fail-closed）")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, o)
-            return o
+        if o.order_type == OrderType.MARKET:
+            if tick is None:
+                o = replace(o, status=OrderStatus.REJECTED,
+                            message="无最新行情，市价单无法撮合（fail-closed）")
+                repo.upsert_order(o, db_path=self.db_path)
+                self._publish(EventType.RISK, o)
+                return o
+            if not _is_today_quote(tick.dt):
+                # 休市/隔夜那份行情给的是**收盘价**，按它算成交等于用昨天的价成交今天的单
+                o = replace(o, status=OrderStatus.REJECTED,
+                            message=f"最新行情是 {_ms_to_local_date(int(tick.dt.timestamp()*1000))}"
+                                    "的收盘价，今日休市——市价单不做撮合（限价单照旧挂起等行情）")
+                repo.upsert_order(o, db_path=self.db_path)
+                self._publish(EventType.RISK, o)
+                return o
 
         if tick is not None:
             o = self._try_fill(o, tick)
@@ -174,7 +207,7 @@ class PaperBroker(BrokerAdapter):
         fill_vol = r.filled_volume
         if _side_str(o.side) == Side.BUY.value:
             fill_vol = affordable_volume(self.cash, r.fill_price, fill_vol,
-                                         self.match_cfg.fee)
+                                         self.match_cfg.fee, symbol=o.symbol)
             if fill_vol <= 0:
                 o = replace(o, status=OrderStatus.REJECTED, message="资金不足拒绝")
                 repo.upsert_order(o, db_path=self.db_path)
@@ -230,10 +263,10 @@ class PaperBroker(BrokerAdapter):
         for t in trades:
             (pre if _ms_to_local_date(t.traded_at) < today else cur).append(t)
         for t in pre:
-            self.book.apply_trade(t, fee=fee.fee(t.side, t.amount))
+            self.book.apply_trade(t, fee=fee.fee(t.side, t.amount, t.symbol))
         self.book.on_new_trading_day()               # 历史买入全部转为可用
         for t in cur:                                # 今日买入 available 不增
-            self.book.apply_trade(t, fee=fee.fee(t.side, t.amount))
+            self.book.apply_trade(t, fee=fee.fee(t.side, t.amount, t.symbol))
         # 当日未成交挂单恢复（重启不丢挂单；含部分成交的余量）
         for st in (OrderStatus.SUBMITTED, OrderStatus.PART_FILLED):
             for o in repo.list_orders(status=st, db_path=self.db_path):

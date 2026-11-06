@@ -3,7 +3,7 @@
 用法（在本机，工具链已经在 %TEMP%\\qd_build 里）：
     uv run python QuantDesk-App/android/build.py
 
-产物：QuantDesk-App/QuantDesk-看盘-1.0.apk —— 手机上直接安装的原生 App，
+产物：QuantDesk-App/QuantDesk.apk —— 手机上直接安装的原生 App，
 不依赖电脑、不依赖浏览器、不自建服务器；页面随包，行情由手机自己联网取。
 
 构建只用到临时目录里的 aapt2 / d8 / zipalign / apksigner 与 android.jar，
@@ -19,15 +19,15 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.dirname(HERE)
 HTML_SOURCE = os.path.join(APP_DIR, "手机看盘.html")
-OUT_APK = os.path.join(APP_DIR, "QuantDesk-看盘-1.0.apk")
+OUT_APK = os.path.join(APP_DIR, "QuantDesk.apk")
 KEYSTORE = os.path.join(HERE, "qd.keystore")
 KEY_ALIAS = "quantdesk"
 KEY_PASS = "quantdesk"
 
 MIN_SDK = "21"
 TARGET_SDK = "33"
-VERSION_CODE = "1"
-VERSION_NAME = "1.0"
+VERSION_CODE = "2"
+VERSION_NAME = "1.2"
 ICON_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
 

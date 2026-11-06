@@ -17,8 +17,9 @@ import dataclasses
 from dataclasses import dataclass, field
 
 from quantdesk.core import constants
-from quantdesk.core.enums import OrderStatus, OrderType, Side
+from quantdesk.core.enums import Board, OrderStatus, OrderType, Side
 from quantdesk.core.models import Bar, Order, Position, Tick, Trade
+from quantdesk.core.symbols import board_of, is_hk
 
 __all__ = [
     "FeeCalculator",
@@ -46,11 +47,23 @@ class FeeCalculator:
         min_commission: float = constants.MIN_COMMISSION,
         stamp_tax_sell: float = constants.STAMP_TAX_SELL,
         transfer_fee: float = constants.TRANSFER_FEE,
+        hk_stamp_rate: float = constants.HK_STAMP_RATE,
+        hk_frc_rate: float = constants.HK_FRC_RATE,
+        hk_afrc_rate: float = constants.HK_AFRC_RATE,
+        hk_settle_rate: float = constants.HK_SETTLE_RATE,
+        hk_settle_min: float = constants.HK_SETTLE_MIN,
+        hk_settle_max: float = constants.HK_SETTLE_MAX,
     ) -> None:
         self.commission_rate = commission_rate
         self.min_commission = min_commission
         self.stamp_tax_sell = stamp_tax_sell
         self.transfer_fee = transfer_fee
+        self.hk_stamp_rate = hk_stamp_rate
+        self.hk_frc_rate = hk_frc_rate
+        self.hk_afrc_rate = hk_afrc_rate
+        self.hk_settle_rate = hk_settle_rate
+        self.hk_settle_min = hk_settle_min
+        self.hk_settle_max = hk_settle_max
 
     def commission(self, amount: float) -> float:
         return round(max(amount * self.commission_rate, self.min_commission), 2)
@@ -68,9 +81,30 @@ class FeeCalculator:
             2,
         )
 
-    def fee(self, side: Side | str, amount: float) -> float:
+    def fee(self, side: Side | str, amount: float, symbol: str | None = None) -> float:
+        """费用。给 symbol 就按该市场的真实费率走（港股另算三项），不给按 A 股。
+
+        费率算错一次，模拟盘的盈亏就是错的——所以这里宁可多问一次板块。
+        """
+        if symbol and is_hk(symbol):
+            return self.hk_fee(amount)
         s = side.value if isinstance(side, Side) else str(side)
         return self.buy_fee(amount) if s == Side.BUY.value else self.sell_fee(amount)
+
+    def hk_fee(self, amount: float) -> float:
+        """港股四项（港币口径，买卖双边同率）：印花税 0.1%（不足 1 港币按 1 港币计，
+        向上取整到元）+ 联交所交易费 0.00565% + 证监会征费 0.0027% +
+        股份交收费 0.002%（2~100 港币）。"""
+        import math
+
+        if amount <= 0:
+            return 0.0
+        stamp = max(math.ceil(amount * self.hk_stamp_rate), 1.0)
+        frc = round(amount * self.hk_frc_rate, 2)
+        afrc = round(amount * self.hk_afrc_rate, 2)
+        settle = min(max(round(amount * self.hk_settle_rate, 2), self.hk_settle_min),
+                     self.hk_settle_max)
+        return round(stamp + frc + afrc + settle, 2)
 
 
 # ---------- 撮合结果 ----------
@@ -119,7 +153,7 @@ def _result(order: Order, price: float, volume: int, seq: int, dt_ms: int,
     if volume <= 0 or price <= 0:
         return MatchResult(order_id=order.order_id)
     trade = _make_trade(order, price, volume, seq, dt_ms)
-    fee = config.fee.fee(order.side, trade.amount)
+    fee = config.fee.fee(order.side, trade.amount, order.symbol)
     return MatchResult(
         order_id=order.order_id,
         filled_volume=volume,
@@ -257,19 +291,35 @@ def apply_fill(order: Order, result: MatchResult) -> Order:
 
 # ---------- 资金可负担量 ----------
 
-def affordable_volume(cash: float, price: float, desired: int,
-                      fee: FeeCalculator, lot: int = constants.LOT_SIZE) -> int:
-    """现金可负担的最大成交量（含费用，向下取整到整手；<一手返回 0）。
+def _lot_step(symbol: str | None) -> int:
+    """按标的取递增单位；认不出代码时退回 A 股主板口径（从严，不会多给量）。"""
+    if not symbol:
+        return constants.LOT_SIZE
+    try:
+        return constants.lot_step(board_of(symbol))
+    except Exception:                                  # noqa: BLE001
+        return constants.LOT_SIZE
 
-    回测与模拟盘共用的资金簿记规则；正式 RiskGate 资金闸在 D16。
+
+def affordable_volume(cash: float, price: float, desired: int,
+                      fee: FeeCalculator, lot: int | None = None,
+                      symbol: str | None = None) -> int:
+    """现金可负担的最大成交量（含费用，向下取整到该市场的最小递增单位）。
+
+    递增单位不能一律按 100 股：科创板/北交所是「起步量之后 1 股递增」，港股每手因发行人
+    而异（快照不给，模拟按 1 股递增）。按 100 取整会把「买 1 股腾讯」算成资金不足——
+    实测就是这个原因让港股单子在撮合端被静默拒掉。
     """
     if desired <= 0 or price <= 0:
         return 0
+    step = lot if lot is not None else _lot_step(symbol)
     est = int(cash / (price * (1 + fee.commission_rate + fee.transfer_fee)))
     vol = min(desired, max(est, 0))
-    while vol > 0 and cash < price * vol + fee.buy_fee(price * vol):
-        vol -= 1
-    vol = (vol // lot) * lot        # 始终整手向下取整（不足一手 = 不可买）
+    while vol > 0 and cash < price * vol + fee.fee(Side.BUY, price * vol, symbol):
+        vol -= step
+    if vol < step:
+        return 0
+    vol = (vol // step) * step        # 始终整倍数向下取整（不足一个递增单位 = 不可买）
     return max(vol, 0)
 
 
@@ -290,6 +340,14 @@ class PositionBook:
     def _entry(self, symbol: str) -> dict[str, float]:
         return self._book.setdefault(symbol, {"volume": 0, "available": 0, "avg_cost": 0.0})
 
+    @staticmethod
+    def _is_t_plus_1(symbol: str) -> bool:
+        """T+1 只对 A 股（含 B 股）成立；认不出版的代码按 A 股从严处理。"""
+        try:
+            return constants.is_t_plus_1(board_of(symbol))
+        except Exception:                              # noqa: BLE001
+            return True
+
     def apply_trade(self, trade: Trade, fee: float = 0.0) -> float:
         """应用成交，返回对现金的净影响（买为负含费、卖为正扣费）。
 
@@ -304,7 +362,10 @@ class PositionBook:
             new_vol = old_vol + trade.volume
             e["volume"] = new_vol
             e["avg_cost"] = round((old_cost + trade.amount + fee) / new_vol, 4) if new_vol else 0.0
-            # T+1：当日买入 available 不增
+            # T+1：当日买入 available 不增。港股是 T+0，当日买入当日即可卖出，
+            # 一律按 A 股冻结会让「今天买的港股今天卖不掉」——那是规则错，不是风控。
+            if not self._is_t_plus_1(trade.symbol):
+                e["available"] = int(e["available"]) + trade.volume
             cash_delta = -(trade.amount + fee)
         else:
             new_vol = int(e["volume"]) - trade.volume
