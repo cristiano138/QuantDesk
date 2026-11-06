@@ -159,8 +159,8 @@ def test_timeout_auto_expires(tmp_path):
     assert live.placed == []
 
 
-def test_restart_pending_survives_and_processable(tmp_path):
-    """kill 主进程 → 重启 → 待确认单仍在且可确认（DoD）。"""
+def test_restart_pending_survives_but_requires_new_channel_confirmation(tmp_path):
+    """待确认记录重启不丢；缺少原通道身份时不能把旧确认投递到新连接。"""
     init_db(tmp_path / "r.db")
     live1 = MockLiveBroker()
     live1.connect()
@@ -179,8 +179,58 @@ def test_restart_pending_survives_and_processable(tmp_path):
     n = gate2.restore_pending()
     assert n == 2                                  # 待确认单仍在
     out = gate2.confirm("R1")                      # 且可处理
-    assert out.status == OrderStatus.FILLED
+    assert out.status == OrderStatus.FAILED
+    assert live2.placed == []
+    assert "重新提交" in out.message
     assert get_order("R2", db_path=tmp_path / "r.db").status == "pending_confirm"
+
+
+def test_confirm_after_switching_to_paper_never_calls_live(env):
+    gate = env["gate"]
+    gate.submit(mk_order("SWITCH"))
+    gate.settings.simulation_only = True
+    assert gate.confirm("SWITCH").status == OrderStatus.REJECTED
+    assert env["live"].placed == []
+
+
+def test_confirm_rechecks_available_cash(env, monkeypatch):
+    gate = env["gate"]
+    gate.submit(mk_order("CASH"))
+    monkeypatch.setattr(env["live"], "get_account", lambda: Account(0, 0, 0))
+    out = gate.confirm("CASH")
+    assert out.status == OrderStatus.REJECTED and "资金不足" in out.message
+    assert env["live"].placed == []
+
+
+def test_confirm_never_switches_to_another_broker(env):
+    gate = env["gate"]
+    gate.submit(mk_order("CHANNEL"))
+    other = MockLiveBroker()
+    other.connect()
+    gate.live = other
+    out = gate.confirm("CHANNEL")
+    assert out.status == OrderStatus.FAILED
+    assert env["live"].placed == other.placed == []
+
+
+def test_confirm_checks_expiry_even_if_background_worker_is_stopped(env):
+    import time
+
+    gate = env["gate"]
+    gate.confirm_timeout_s = 10
+    gate.submit(mk_order("LATE"))
+    gate._armed_at["LATE"] = time.monotonic() - 11
+    out = gate.confirm("LATE")
+    assert out.status == OrderStatus.EXPIRED_CONFIRM
+    assert env["live"].placed == []
+
+
+def test_restore_pending_does_not_extend_confirmation_window(env):
+    gate = env["gate"]
+    gate.submit(mk_order("RESTORE"))
+    armed = gate._armed_at["RESTORE"]
+    gate.restore_pending()
+    assert gate._armed_at["RESTORE"] == armed
 
 
 def test_disconnected_fail_closed_reject(env):

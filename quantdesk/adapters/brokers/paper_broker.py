@@ -249,6 +249,10 @@ class PaperBroker(BrokerAdapter):
 
     def _restore(self) -> None:
         """从 SQLite 回放：账户 + 全部成交 → 持仓/T+1/资金；当日挂单恢复。"""
+        # connect 可重复调用；恢复是重建快照，不是在上次内存持仓上追加。
+        self.book = PositionBook()
+        self._resting.clear()
+        self.cash = self.initial_cash
         row = repo.account_get(db_path=self.db_path)
         if row is not None:
             self.cash = row.cash
@@ -256,7 +260,7 @@ class PaperBroker(BrokerAdapter):
         else:
             repo.account_set(self.cash, self.initial_cash, db_path=self.db_path)
 
-        trades = repo.list_trades(limit=10 ** 9, db_path=self.db_path)
+        trades = repo.list_trades(limit=10 ** 9, db_path=self.db_path, chronological=True)
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
         fee: FeeCalculator = self.match_cfg.fee
         pre, cur = [], []

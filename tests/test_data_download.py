@@ -123,6 +123,15 @@ def test_download_returns_task_id_and_progresses(client, calls, hub):
     assert "000001.SZ" not in final["ok"]
 
 
+@pytest.mark.parametrize("freq", ["1M", "1m"])
+def test_month_and_minute_download_are_distinct(client, calls, hub, freq):
+    tid = client.post("/api/data/download", json={
+        "symbols": ["600000.SH"], "freq": freq}).json()["task_id"]
+    final = _wait(tid)
+    assert final["freq"] == freq
+    assert calls.records[-1][2] == freq
+
+
 def test_default_mode_is_fill_not_overwrite(client, calls, hub):
     """默认必须只补缺不覆盖：公开源字段不齐，整段重写等于把已有成交额打空。"""
     tid = client.post("/api/data/download", json={"symbols": ["600000.SH"]}).json()["task_id"]

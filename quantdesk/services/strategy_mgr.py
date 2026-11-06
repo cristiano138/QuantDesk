@@ -220,7 +220,7 @@ class StrategyManager:
             price = data.get("price")
             try:
                 intent = Order(
-                    order_id=self.trading.gate.new_order_id(),
+                    order_id=str(data.get("order_id") or self.trading.gate.new_order_id()),
                     symbol=str(data["symbol"]), side=Side(str(data["side"])),
                     price=float(price) if price else 0.0,
                     volume=int(data["volume"]),
@@ -231,7 +231,13 @@ class StrategyManager:
             except (KeyError, ValueError, TypeError) as e:
                 self._emit_log(f"订单意图非法已丢弃: {e}（{data}）")
                 return
-            out = self.trading.gate.submit(intent)
+            # IPC 重复投递同一意图不能再下单，也不能覆盖已成交账本。
+            with self._lock:
+                previous = repo.get_order(intent.order_id, db_path=self.db_path)
+                if previous is not None:
+                    self._emit_log(f"重复订单意图已忽略: {intent.order_id}")
+                    return
+                out = self.trading.gate.submit(intent)
             if self.bus is not None:
                 from quantdesk.core.events import Event, EventType
 

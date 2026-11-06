@@ -33,12 +33,8 @@ __all__ = ["RealtimePump", "get_pump"]
 
 _EMIT_MIN_INTERVAL = 1.0          # 同一 (symbol, freq) 的 bar 下行最小间隔（秒）
 _SEED_BARS = 250                  # 订阅时回灌的历史根数（够均线类策略立刻决策）
-_FREQ_AGG = {Frequency.M1: "%Y-%m-%d %H:%M", Frequency.D1: "%Y-%m-%d",
-             Frequency.W1: "%Y-%GW%W", Frequency.MO1: "%Y-%m"}
-
-
 def _bucket_key(dt: datetime, freq: Frequency) -> str:
-    return dt.astimezone().strftime(_FREQ_AGG.get(freq, "%Y-%m-%d"))
+    return _floor_dt(dt, freq).isoformat()
 
 
 def _floor_dt(dt: datetime, freq: Frequency) -> datetime:
@@ -195,13 +191,13 @@ class RealtimePump:
             fed.drop_subscriber(f"strategy:{strategy_id}")
 
     def _seed_history(self, strategy_id: str, symbols: list[str], freq: Frequency) -> None:
-        """把本地日线尾部若干根灌进子进程缓冲，策略启动即可决策。"""
+        """按订阅周期填充历史缓存；预热不触发策略回调，也不产生历史委托。"""
         sup = self._supervisor(strategy_id)
         if sup is None:
             return
         for sym in symbols:
             try:
-                df = self.store.read(sym, Frequency.D1, adjust=AdjustType.FORWARD)
+                df = self.store.read(sym, freq, adjust=AdjustType.FORWARD)
             except Exception as e:  # noqa: BLE001 无本地数据不阻断启动
                 log.info("历史种子读取失败 %s: %s", sym, e)
                 continue
@@ -213,7 +209,7 @@ class RealtimePump:
                           open=float(row["open"]), high=float(row["high"]),
                           low=float(row["low"]), close=float(row["close"]),
                           volume=float(row["volume"]), amount=float(row["amount"]))
-                sup.deliver("bar", bar_to_dict(bar))
+                sup.deliver("bar", {**bar_to_dict(bar), "warmup": True})
 
     # ---------- 行情入口 ----------
     def _on_item(self, item) -> None:
@@ -224,6 +220,16 @@ class RealtimePump:
                 self.market.on_tick(item)
             if self.trading is not None and self._should_match_paper():
                 self.trading.paper.on_tick(item)      # 内部自带锁与撮合
+            with self._lock:
+                targets = set(self._symbol_strategies.get(item.symbol, ()))
+            for sid in targets:
+                sup = self._supervisor(sid)
+                if sup is not None:
+                    sup.deliver("tick", {"symbol": item.symbol, "dt": item.dt.isoformat(),
+                                         "last": item.last, "open": item.open,
+                                         "high": item.high, "low": item.low,
+                                         "volume": item.volume, "amount": item.amount,
+                                         "bids": item.bids, "asks": item.asks})
             self._aggregate(item)
         elif isinstance(item, Bar):
             self._fanout_bar(item)
@@ -295,11 +301,13 @@ class RealtimePump:
         return getter(strategy_id) if callable(getter) else None
 
     def status(self) -> dict:
-        return {"watched": sorted(self._watched), "ticks_seen": self.ticks_seen,
-                "bars_emitted": self.bars_emitted,
-                "strategies": {sid: {"symbols": sorted(syms),
-                                     "freq": f.value if hasattr(f, "value") else str(f)}
-                               for sid, syms in self._strategy_symbols.items()},
+        with self._lock:
+            watched = sorted(self._watched)
+            strategies = {sid: {"symbols": sorted(syms),
+                                "freq": self._strategy_freq[sid].value}
+                          for sid, syms in self._strategy_symbols.items()}
+        return {"watched": watched, "ticks_seen": self.ticks_seen,
+                "bars_emitted": self.bars_emitted, "strategies": strategies,
                 "realtime_source": (self.hub.realtime_channel_name() if self.hub else "")}
 
 

@@ -12,14 +12,17 @@
 from __future__ import annotations
 
 import importlib.util
+import dataclasses
 import multiprocessing
 import sys
 import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from quantdesk.core.enums import Frequency
+from quantdesk.core.enums import Frequency, OrderType, Side
 from quantdesk.core.models import Bar, Order, Position, Tick, Trade
 from quantdesk.engine.strategy_base import BaseStrategy, StrategyContext
 from quantdesk.ipc.bridge import BridgeClient
@@ -117,7 +120,7 @@ class IPCStrategyContext(StrategyContext):
         self._client = client
         self._strategy_id = strategy_id
         self._strategy: BaseStrategy | None = None
-        self._bars: dict[str, deque] = {}
+        self._bars: dict[tuple[str, Frequency], deque] = {}
         self._ticks: dict[str, Tick] = {}
         self._positions: list[dict] = []
         self._history_maxlen = history_maxlen
@@ -127,14 +130,18 @@ class IPCStrategyContext(StrategyContext):
         """返回 False 表示收到停止控制指令。"""
         if tag == "bar":
             bar = bar_from_dict(data)
-            buf = self._bars.setdefault(bar.symbol, deque(maxlen=self._history_maxlen))
+            if bar.dt.tzinfo is not None:
+                bar = dataclasses.replace(
+                    bar, dt=bar.dt.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None))
+            buf = self._bars.setdefault((bar.symbol, Frequency(bar.freq)),
+                                        deque(maxlen=self._history_maxlen))
             # 按 dt upsert：实时下行推的是「形成中的当前 bar」，同一根会被多次更新；
             # 直接 append 会把历史缓冲刷满重复行，均线类策略算出来的就是错的。
             if buf and buf[-1].dt == bar.dt:
                 buf[-1] = bar
             else:
                 buf.append(bar)
-            if self._strategy is not None:
+            if self._strategy is not None and not data.get("warmup", False):
                 self._strategy.on_bar(bar)
         elif tag == "tick":
             tick = tick_from_dict(data)
@@ -166,24 +173,29 @@ class IPCStrategyContext(StrategyContext):
         """
         import pandas as pd
 
-        buf = self._bars.get(symbol)
-        if not buf:
-            return pd.DataFrame(columns=HISTORY_COLUMNS)
-        rows = [bar_to_dict(b) for b in list(buf)[-bars:]]
-        return pd.DataFrame(rows, columns=HISTORY_COLUMNS)
+        buf = self._bars.get((symbol, Frequency(freq)))
+        rows = ([bar_to_dict(b) for b in list(buf)[-bars:]] if buf and bars > 0 else [])
+        df = pd.DataFrame(rows, columns=HISTORY_COLUMNS)
+        df["dt"] = pd.to_datetime(df["dt"]).astype("datetime64[ns]")
+        return df.sort_values("dt").reset_index(drop=True)
 
-    def buy(self, symbol: str, volume: int, price: float | None = None) -> dict:
+    def buy(self, symbol: str, volume: int, price: float | None = None) -> Order:
         return self._submit("buy", symbol, volume, price)
 
-    def sell(self, symbol: str, volume: int, price: float | None = None) -> dict:
+    def sell(self, symbol: str, volume: int, price: float | None = None) -> Order:
         return self._submit("sell", symbol, volume, price)
 
-    def _submit(self, side: str, symbol: str, volume: int, price: float | None) -> dict:
-        intent = {"symbol": symbol, "side": side, "volume": int(volume),
+    def _submit(self, side: str, symbol: str, volume: int, price: float | None) -> Order:
+        # 引擎子进程预分配相关 ID，主进程保留该 ID；这里只表示意图，仍须经 RiskGate。
+        order = Order(order_id=f"OD-{uuid4().hex.upper()}", symbol=symbol, side=Side(side),
+                      volume=int(volume), price=float(price) if price is not None else 0.0,
+                      order_type=OrderType.LIMIT if price is not None else OrderType.MARKET,
+                      strategy_id=self._strategy_id, message="订单意图已发送，等待服务端风控与回报")
+        intent = {"order_id": order.order_id, "symbol": symbol, "side": side, "volume": int(volume),
                   "price": price, "order_type": "limit" if price is not None else "market",
                   "strategy_id": self._strategy_id, "ts": time.time()}
         self._client.send("order_intent", intent)
-        return intent
+        return order
 
     def get_position(self, symbol: str) -> Position | None:
         for p in self._positions:

@@ -667,9 +667,9 @@ namespace QuantDesk.Watch
             }
         }
 
-        private static void CheckUpdate(string root, bool manual)
+        private static void CheckUpdate(string root, bool manual, string feedOverride = null)
         {
-            string feed = FeedUrl();
+            string feed = feedOverride ?? FeedUrl();
             string json = DownloadText(feed);
             if (string.IsNullOrEmpty(json))
             {
@@ -693,6 +693,17 @@ namespace QuantDesk.Watch
             if (string.IsNullOrEmpty(newest) || string.IsNullOrEmpty(url))
             {
                 if (manual) Notify(AppDisplayName, "更新清单缺字段（version 或 url），不动现有文件。", true);
+                return;
+            }
+            // 清单缺指纹、非法指纹都必须拒绝；不能把「没有可比值」当成校验成功。
+            if (!ValidSha256(sha))
+            {
+                Notify(AppDisplayName, "更新清单缺少有效的 SHA-256，不下载、不改现有文件。", true);
+                return;
+            }
+            if (!SafeVersion(newest))
+            {
+                Notify(AppDisplayName, "更新清单版本号格式非法，不下载、不改现有文件。", true);
                 return;
             }
             if (CompareVersion(mine, newest) >= 0)
@@ -719,8 +730,7 @@ namespace QuantDesk.Watch
                 // SHA-256 对得上才允许往软件目录里写任何东西：更新通道被人换过一次，
                 // 后果就是把别人的文件装进用户机器。校验不过就一个字节都不动。
                 string got = Sha256File(zip);
-                if (!string.IsNullOrEmpty(sha) && sha.Length == 64
-                    && !string.Equals(got, sha, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(got, sha, StringComparison.OrdinalIgnoreCase))
                 {
                     TryDelete(zip);
                     Notify(AppDisplayName,
@@ -767,7 +777,8 @@ namespace QuantDesk.Watch
             try
             {
                 string[] lines = File.ReadAllLines(PendingMarker);
-                return lines.Length > 0 ? lines[0].Trim() : null;
+                string version = lines.Length > 0 ? lines[0].Trim() : null;
+                return SafeVersion(version) ? version : null;
             }
             catch (Exception) { return null; }
         }
@@ -976,6 +987,22 @@ namespace QuantDesk.Watch
         }
 
         // ---------------- 从清单里取字段（不引第三方 JSON 库） ----------------
+
+        private static bool ValidSha256(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length != 64) return false;
+            foreach (char c in value)
+                if (!Uri.IsHexDigit(c)) return false;
+            return true;
+        }
+
+        private static bool SafeVersion(string value)
+        {
+            // 版本号会进入暂存目录路径；只收版本组件，拒绝路径分隔符、盘符与 ..。
+            return value != null && value.Length <= 80
+                && System.Text.RegularExpressions.Regex.IsMatch(value,
+                    @"\A[0-9]+(?:\.[0-9]+)*(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?\z");
+        }
 
         private static string JsonBlock(string json, string key)
         {

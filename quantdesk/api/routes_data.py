@@ -108,7 +108,9 @@ def download(req: DownloadRequest) -> dict:
     """提交下载任务，立刻返回 task_id（进度走 GET /api/data/task/{task_id}）。"""
     if not req.symbols:
         raise HTTPException(status_code=400, detail="symbols 为空：请至少填写一个标的代码")
-    freq = _FREQ_ALIASES.get((req.freq or "").strip().lower())
+    # 1M 是月线，1m 是分钟线；先匹配原值，再兼容其它大小写写法。
+    key = (req.freq or "").strip()
+    freq = _FREQ_ALIASES.get(key) or _FREQ_ALIASES.get(key.lower())
     if freq is None:
         raise HTTPException(status_code=400,
                             detail=f"未知周期: {req.freq}（可选: {sorted(_FREQ_ALIASES)}）")

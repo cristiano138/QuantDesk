@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from quantdesk.core import constants
 from quantdesk.core.enums import Board, OrderStatus, OrderType, Side
 from quantdesk.core.models import Bar, Order, Position, Tick, Trade
-from quantdesk.core.symbols import board_of, is_hk
+from quantdesk.core.symbols import board_of, currency_of, is_hk
 
 __all__ = [
     "FeeCalculator",
@@ -165,6 +165,11 @@ def _result(order: Order, price: float, volume: int, seq: int, dt_ms: int,
 
 # ---------- bar 撞价 ----------
 
+def _round_price(price: float, symbol: str) -> float:
+    # B 股与港股保留千分位，不能把 0.173 的卖出成交价舍成 0.17。
+    digits = 3 if currency_of(symbol) != "CNY" else 2
+    return round(price, digits)
+
 def match_on_bar(order: Order, bar: Bar, config: MatchConfig | None = None) -> MatchResult:
     """K 线撞价（回测主路径）。
 
@@ -194,7 +199,7 @@ def match_on_bar(order: Order, bar: Bar, config: MatchConfig | None = None) -> M
     if is_market:
         # 市价：开盘价 ± 滑点，仍受 bar 量约束
         price = bar.open * ((1 + cfg.slippage) if is_buy else (1 - cfg.slippage))
-        price = round(price, 2)
+        price = _round_price(price, order.symbol)
         vol = min(rem, vol_cap)
         return _result(order, price, vol, seq, dt_ms, cfg)
 
@@ -212,7 +217,7 @@ def match_on_bar(order: Order, bar: Bar, config: MatchConfig | None = None) -> M
         fill_price = bar.open if bar.open >= price else price
 
     vol = min(rem, vol_cap)
-    return _result(order, round(fill_price, 2), vol, seq, dt_ms, cfg)
+    return _result(order, _round_price(fill_price, order.symbol), vol, seq, dt_ms, cfg)
 
 
 # ---------- tick 撞价 ----------
@@ -245,7 +250,7 @@ def match_on_tick(order: Order, tick: Tick, config: MatchConfig | None = None) -
         else:
             opp = tick.bids[0][0] if tick.bids else tick.last
             price = opp * (1 - cfg.slippage)
-        return _result(order, round(price, 2), rem, seq, dt_ms, cfg)
+        return _result(order, _round_price(price, order.symbol), rem, seq, dt_ms, cfg)
 
     price = order.price
     if price <= 0:
@@ -260,7 +265,7 @@ def match_on_tick(order: Order, tick: Tick, config: MatchConfig | None = None) -
             return MatchResult(order_id=order.order_id)
         fill_price = max(price, tick.last)
 
-    return _result(order, round(fill_price, 2), rem, seq, dt_ms, cfg)
+    return _result(order, _round_price(fill_price, order.symbol), rem, seq, dt_ms, cfg)
 
 
 # ---------- 订单状态推进 ----------
@@ -370,7 +375,7 @@ class PositionBook:
         else:
             new_vol = int(e["volume"]) - trade.volume
             e["volume"] = max(new_vol, 0)
-            e["available"] = min(int(e["available"]), max(new_vol, 0))
+            e["available"] = max(0, min(int(e["available"]) - trade.volume, new_vol))
             cash_delta = trade.amount - fee
         return cash_delta
 

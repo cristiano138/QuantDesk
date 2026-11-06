@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func
+from sqlalchemy import func, literal_column
 from sqlmodel import Session, select
 
 from quantdesk.core.enums import OrderStatus, OrderType, Side
@@ -185,12 +185,17 @@ def append_trade(trade: Trade, db_path=None) -> None:
         s.commit()
 
 
-def list_trades(start_ms: int | None = None, limit: int = 1000, db_path=None) -> list[Trade]:
+def list_trades(start_ms: int | None = None, limit: int = 1000, db_path=None,
+                chronological: bool = False) -> list[Trade]:
+    """查询默认最新在前；账本回放按时间正序，同毫秒按 SQLite 入账顺序。"""
     with get_session(db_path) as s:
         stmt = select(TradeRow)
         if start_ms is not None:
             stmt = stmt.where(TradeRow.traded_at >= start_ms)
-        rows = s.exec(stmt.order_by(TradeRow.traded_at.desc()).limit(limit)).all()
+        ordering = ((TradeRow.traded_at.asc(), literal_column("rowid").asc())
+                    if chronological else
+                    (TradeRow.traded_at.desc(), literal_column("rowid").desc()))
+        rows = s.exec(stmt.order_by(*ordering).limit(limit)).all()
         return [_row_to_trade(r) for r in rows]
 
 

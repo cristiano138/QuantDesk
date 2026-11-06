@@ -79,7 +79,13 @@ def test_hk_lot_size_is_not_blocked(tmp_path):
     """港股每手股数由发行人自定、快照不给 → 模拟盘按 1 股递增放行（界面另注明实际每手）。"""
     gate, _ = mk_gate(tmp_path)
     assert gate.validate(mk_order(Side.BUY, price=300.0, volume=1, symbol=HK)) == []
-    assert gate.validate(mk_order(Side.BUY, price=300.0, volume=333, symbol=HK)) == []
+    assert gate.validate(mk_order(Side.BUY, price=300.0, volume=331, symbol=HK)) == []
+
+
+def test_hk_cash_check_includes_hk_fees(tmp_path):
+    gate, _ = mk_gate(tmp_path)  # 现金 100000；333 股的金额加港股费用为 100010.34。
+    reasons = gate.validate(mk_order(Side.BUY, price=300.0, volume=333, symbol=HK))
+    assert any("资金不足" in reason for reason in reasons)
 
 
 def test_hk_has_no_price_limit_check(tmp_path):

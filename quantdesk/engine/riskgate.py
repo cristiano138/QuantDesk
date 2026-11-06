@@ -32,7 +32,7 @@ import pandas as pd
 
 from quantdesk.core import constants
 from quantdesk.core.enums import AdjustType, Board, Frequency, OrderStatus, OrderType, Side
-from quantdesk.core.errors import ConnectionLostError
+from quantdesk.core.errors import BrokerError, ConnectionLostError
 from quantdesk.core.events import Event, EventType, EventBus
 from quantdesk.core.models import Order
 from quantdesk.core.symbols import board_of, currency_of, is_hk, is_st, normalize
@@ -97,7 +97,8 @@ class RiskGate:
         self.fee = fee or FeeCalculator()
         self.confirm_timeout_s = float(confirm_timeout_s)
         self._pending_confirm: dict[str, Order] = {}
-        self._armed_at: dict[str, float] = {}   # 确认窗口计时（重启后重新起算）
+        self._armed_at: dict[str, float] = {}   # 确认窗口计时；恢复时扣除已经过的时间
+        self._pending_targets: dict[str, tuple[object, str]] = {}
         self._lock = threading.RLock()
         self._prev_close_cache: dict[str, tuple[str, float]] = {}
         self._quote_cache: dict[str, tuple[str, dict]] = {}
@@ -123,6 +124,7 @@ class RiskGate:
             with self._lock:
                 o = self._pending_confirm.pop(oid, None)
                 self._armed_at.pop(oid, None)
+                self._pending_targets.pop(oid, None)
             if o is None:
                 continue
             o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM,
@@ -131,12 +133,17 @@ class RiskGate:
             self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
 
     def restore_pending(self) -> int:
-        """重启恢复：从库重载待确认单，确认窗口重新起算（DoD：重启后仍在且可处理）。"""
+        """保留待确认记录但不延长窗口；重启后原通道身份未持久化的单须重新提交。"""
         rows = repo.list_orders(status=OrderStatus.PENDING_CONFIRM, db_path=self.db_path)
         with self._lock:
             for o in rows:
+                if o.order_id in self._pending_confirm:
+                    continue
                 self._pending_confirm[o.order_id] = o
-                self._armed_at[o.order_id] = time.monotonic()
+                elapsed = max(0.0, (now_ms() - o.updated_at) / 1000)
+                self._armed_at[o.order_id] = time.monotonic() - elapsed
+        if self.confirm_timeout_s > 0:
+            self._expire_overdue()
         return len(rows)
 
     # ---------- 咽喉 ----------
@@ -171,6 +178,8 @@ class RiskGate:
         with self._lock:
             self._pending_confirm[o.order_id] = o
             self._armed_at[o.order_id] = time.monotonic()
+            self._pending_targets[o.order_id] = (
+                broker, str(getattr(self._current_settings(), "broker_channel", "")))
         repo.upsert_order(o, db_path=self.db_path)     # 先落库
         self._publish(EventType.RISK, {"action": "confirm_request", "order": _to_dict(o)})
         return o
@@ -245,7 +254,7 @@ class RiskGate:
         if side == Side.BUY.value and broker is not None and order.price > 0:
             acct = broker.get_account()
             notional = order.price * order.volume
-            need = notional + self.fee.buy_fee(notional)
+            need = notional + self.fee.fee(Side.BUY, notional, order.symbol)
             if need > acct.cash + 1e-6:
                 v.append(f"资金不足：需 {need:.2f} > 可用 {acct.cash:.2f}")
 
@@ -406,12 +415,21 @@ class RiskGate:
 
     # ---------- 闸③：确认回调 ----------
     def confirm(self, order_id: str) -> Order:
-        """用户确认 → 投递实盘。通道断线 → FAILED（fail-closed，不静默）。"""
+        """确认时再次检查窗口、模式、通道与交易规则，通过后才投递实盘。"""
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
-            self._armed_at.pop(order_id, None)
+            armed = self._armed_at.pop(order_id, None)
+            target = self._pending_targets.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
+        if (self.confirm_timeout_s > 0
+                and (armed is None or time.monotonic() - armed >= self.confirm_timeout_s)):
+            o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM, message="二次确认超时自动作废")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
+            return o
+        if self._sim_only():
+            return self._reject(o, "确认前已切回模拟盘，原实盘意图作废；请重新提交")
         live = self._resolve_live()
         if live is None:
             o = _replace(o, status=OrderStatus.FAILED,
@@ -424,10 +442,25 @@ class RiskGate:
             repo.upsert_order(o, db_path=self.db_path)
             self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
             return o
+        channel = str(getattr(self._current_settings(), "broker_channel", ""))
+        if target is None or target[0] is not live or target[1] != channel:
+            o = _replace(o, status=OrderStatus.FAILED,
+                         message="原实盘通道身份无法核对或已变化，请重新提交并确认")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+            return o
         try:
+            violations = self.validate(o, broker=live, live=True)
+            if violations:
+                return self._reject(o, "确认时校验未通过：" + "；".join(violations))
             placed = live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
         except ConnectionLostError as e:
             o = _replace(o, status=OrderStatus.FAILED, message=f"通道断线：{e}")
+            repo.upsert_order(o, db_path=self.db_path)
+            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+            return o
+        except BrokerError as e:
+            o = _replace(o, status=OrderStatus.FAILED, message=f"实盘委托失败：{e}")
             repo.upsert_order(o, db_path=self.db_path)
             self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
             return o
@@ -439,6 +472,7 @@ class RiskGate:
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
             self._armed_at.pop(order_id, None)
+            self._pending_targets.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
         o = _replace(o, status=OrderStatus.REJECTED, message="用户拒绝（二次确认）")
