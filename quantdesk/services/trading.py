@@ -81,6 +81,7 @@ class TradingService:
         with self._lock:
             if self._started:
                 self.paper.disconnect()
+                self.gate.stop()                  # 超时线程跟着服务停，不留悬着的守护线程
                 if self.hub is not None:
                     self.hub.stop()
                 self._started = False

@@ -22,9 +22,9 @@ fail-closed 口径：
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import logging
 import threading
-import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -97,8 +97,9 @@ class RiskGate:
         self.fee = fee or FeeCalculator()
         self.confirm_timeout_s = float(confirm_timeout_s)
         self._pending_confirm: dict[str, Order] = {}
-        self._armed_at: dict[str, float] = {}   # 确认窗口计时；恢复时扣除已经过的时间
-        self._pending_targets: dict[str, tuple[object, str]] = {}
+        # 本进程内记「这笔是哪个连接实例武装的」：热切换/换连接时旧意图不能投到新实例上。
+        # 跨进程的判据不在这儿——那份跟着委托落库（见 store/repo.arm_confirm）。
+        self._armed_broker: dict[str, object] = {}
         self._lock = threading.RLock()
         self._prev_close_cache: dict[str, tuple[str, float]] = {}
         self._quote_cache: dict[str, tuple[str, dict]] = {}
@@ -108,7 +109,7 @@ class RiskGate:
                                                    name="riskgate-expiry", daemon=True)
             self._expiry_thread.start()
 
-    # ---------- 超时作废（闸③ 10s 自动作废） ----------
+    # ---------- 超时作废（闸③：判据是落库的绝对截止时间，不是本进程计时） ----------
     def _expiry_loop(self) -> None:
         while not self._expiry_stop.wait(0.2):
             try:
@@ -116,34 +117,52 @@ class RiskGate:
             except Exception:                      # noqa: BLE001 — 守护循环不中断
                 continue
 
+    def stop(self) -> None:
+        """停掉超时线程（进程退出/测试）。待确认记录不动——判定本来就不依赖这个线程。"""
+        self._expiry_stop.set()
+        thread = getattr(self, "_expiry_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
     def _expire_overdue(self) -> None:
-        deadline = time.monotonic() - self.confirm_timeout_s
+        """按库里的截止时间作废过期确认。
+
+        清理线程只决定「什么时候被用户看到」，不决定「算不算过期」：
+        线程没跑到，确认时也照样当场判过期（`confirm()` 走同一条判据）。
+        """
+        expired = repo.expire_overdue_confirm(now_ms(), db_path=self.db_path)
+        if not expired:
+            return
         with self._lock:
-            overdue = [oid for oid, armed in self._armed_at.items() if armed < deadline]
-        for oid in overdue:
-            with self._lock:
+            for oid in expired:
                 o = self._pending_confirm.pop(oid, None)
-                self._armed_at.pop(oid, None)
-                self._pending_targets.pop(oid, None)
-            if o is None:
-                continue
-            o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM,
-                         message=f"二次确认超时（{self.confirm_timeout_s:.0f}s）自动作废")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
+                self._armed_broker.pop(oid, None)
+                if o is None:
+                    continue
+                o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM,
+                             message=f"二次确认超时（{self.confirm_timeout_s:.0f}s）自动作废")
+                self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
 
     def restore_pending(self) -> int:
-        """保留待确认记录但不延长窗口；重启后原通道身份未持久化的单须重新提交。"""
+        """重启后把待确认单读回来。
+
+        确认窗口是落库的绝对截止时间，所以恢复既不重新计时、也不因为「换了个连接实例」
+        就判不了——身份能不能核对，看库里那份判据和当前通道/账户指纹对不对得上。
+        结果不明（`result_uncertain`）的单不属于待确认队列，单独广播一次提醒核对。
+        """
         rows = repo.list_orders(status=OrderStatus.PENDING_CONFIRM, db_path=self.db_path)
         with self._lock:
             for o in rows:
-                if o.order_id in self._pending_confirm:
-                    continue
-                self._pending_confirm[o.order_id] = o
-                elapsed = max(0.0, (now_ms() - o.updated_at) / 1000)
-                self._armed_at[o.order_id] = time.monotonic() - elapsed
-        if self.confirm_timeout_s > 0:
-            self._expire_overdue()
+                self._pending_confirm.setdefault(o.order_id, o)
+        uncertain = repo.list_uncertain(db_path=self.db_path)
+        if uncertain:
+            self._publish(EventType.RISK, {
+                "action": "uncertain_review",
+                "count": len(uncertain),
+                "order_ids": [o.order_id for o in uncertain],
+                "hint": "这些委托结果不明：先与券商核对，不自动重发",
+            })
+        self._expire_overdue()
         return len(rows)
 
     # ---------- 咽喉 ----------
@@ -171,16 +190,20 @@ class RiskGate:
             # 闸① 路由：模拟撮合（无确认流）
             return broker.place_order(_replace(o, status=OrderStatus.SUBMITTED))
 
-        # 实盘路径：闸③ 二次确认（D17 完整版：先落库 → WS 推送 → 超时作废）
+        # 实盘路径：闸③ 二次确认（先落库 → WS 推送 → 超时作废）
         if not broker.health_check():
             return self._reject(o, "实盘通道断线——fail-closed 拒单（不排队不重试）")
+        deadline = (now_ms() + int(self.confirm_timeout_s * 1000)
+                    if self.confirm_timeout_s > 0 else 0)
         o = _replace(o, status=OrderStatus.PENDING_CONFIRM)
+        repo.upsert_order(o, db_path=self.db_path)     # 先落库
+        repo.arm_confirm(o.order_id, mode="live", channel=self._channel_id(broker),
+                         account=self._account_fingerprint(broker),
+                         rules=self._ruleset_version(), deadline_ms=deadline,
+                         db_path=self.db_path)         # 判据跟着委托走，重启后仍可核对
         with self._lock:
             self._pending_confirm[o.order_id] = o
-            self._armed_at[o.order_id] = time.monotonic()
-            self._pending_targets[o.order_id] = (
-                broker, str(getattr(self._current_settings(), "broker_channel", "")))
-        repo.upsert_order(o, db_path=self.db_path)     # 先落库
+            self._armed_broker[o.order_id] = broker
         self._publish(EventType.RISK, {"action": "confirm_request", "order": _to_dict(o)})
         return o
 
@@ -415,55 +438,64 @@ class RiskGate:
 
     # ---------- 闸③：确认回调 ----------
     def confirm(self, order_id: str) -> Order:
-        """确认时再次检查窗口、模式、通道与交易规则，通过后才投递实盘。"""
+        """确认 = 按落库那份判据重新走一遍闸，通过才投真钱。
+
+        顺序有讲究：先判「这张确认票还作不作数」（截止时间、模式、通道、账户、规则版本），
+        再按最新资金/可卖量/价格/仓位过闸②，最后用一次原子状态转换（pending_confirm →
+        submitted）占住这笔，才调券商。所以：清理线程停不停不影响过期判定；重复确认与
+        并发确认只可能有一次投递；进程在券商返回前死掉，重启看到的是 submitted 而不是待确认。
+        """
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
-            armed = self._armed_at.pop(order_id, None)
-            target = self._pending_targets.pop(order_id, None)
+            armed_broker = self._armed_broker.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
-        if (self.confirm_timeout_s > 0
-                and (armed is None or time.monotonic() - armed >= self.confirm_timeout_s)):
-            o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM, message="二次确认超时自动作废")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
-            return o
+
+        ctx = repo.confirm_context(order_id, db_path=self.db_path)
+        if ctx is None:
+            return self._expire(o, "这条待确认记录没有确认判据（升级前的老记录）——"
+                                   "身份无法核对，已作废，请重新提交")
+        if ctx["deadline"] and now_ms() > ctx["deadline"]:
+            return self._expire(o, f"二次确认超时（窗口 {self.confirm_timeout_s:.0f}s）自动作废")
         if self._sim_only():
             return self._reject(o, "确认前已切回模拟盘，原实盘意图作废；请重新提交")
+
         live = self._resolve_live()
         if live is None:
-            o = _replace(o, status=OrderStatus.FAILED,
-                         message="确认时实盘通道不可用——fail-closed")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
-            return o
+            return self._fail(o, "确认时实盘通道不可用——fail-closed")
         if not live.health_check():
-            o = _replace(o, status=OrderStatus.FAILED, message="确认时通道断线——fail-closed")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
-            return o
+            return self._fail(o, "确认时通道断线——fail-closed")
+        if ctx["mode"] != "live":
+            return self._fail(o, f"确认判据的模式不是实盘（{ctx['mode']}）——请重新提交")
         channel = str(getattr(self._current_settings(), "broker_channel", ""))
-        if target is None or target[0] is not live or target[1] != channel:
-            o = _replace(o, status=OrderStatus.FAILED,
-                         message="原实盘通道身份无法核对或已变化，请重新提交并确认")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
-            return o
+        if armed_broker is not None and armed_broker is not live:
+            return self._fail(o, "原实盘连接实例已被更换，身份无法核对——请重新提交并确认")
+        if ctx["channel"] != self._channel_id(live) or (channel and ctx["channel"] != channel):
+            return self._fail(o, f"实盘通道已变化（确认时为 {ctx['channel'] or '未知'}，"
+                                 f"现在 {self._channel_id(live)}）——原确认作废，请重新提交")
+        if ctx["account"] != self._account_fingerprint(live):
+            return self._fail(o, "资金账户与确认时不是同一个——原确认作废，请重新提交")
+        if ctx["rules"] != self._ruleset_version():
+            return self._fail(o, "交易规则口径在确认期间变了——原确认的校验结论不再沿用，"
+                                 "请重新提交并按新规则复核")
+
+        # 原子占位：抢不到说明这一笔已被确认过/已作废，绝不会投第二遍
+        if not repo.claim_pending(order_id, db_path=self.db_path):
+            raise ValueError(f"订单 {order_id} 已不在待确认状态（已提交或已作废）")
         try:
             violations = self.validate(o, broker=live, live=True)
             if violations:
                 return self._reject(o, "确认时校验未通过：" + "；".join(violations))
             placed = live.place_order(_replace(o, status=OrderStatus.SUBMITTED))
         except ConnectionLostError as e:
-            o = _replace(o, status=OrderStatus.FAILED, message=f"通道断线：{e}")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
-            return o
+            # 断线时这一笔可能已经被券商收下：落「结果不明」，重启先核对不盲重发
+            return self._fail(o, f"通道断线，委托结果不确定：{e}（请勿重复提交，先与券商核对）",
+                              uncertain=True)
         except BrokerError as e:
-            o = _replace(o, status=OrderStatus.FAILED, message=f"实盘委托失败：{e}")
-            repo.upsert_order(o, db_path=self.db_path)
-            self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
-            return o
+            return self._fail(o, f"实盘委托失败：{e}")
+        except Exception as e:                              # noqa: BLE001 — 结果一律按不确定处理
+            return self._fail(o, f"通道返回异常，委托结果不确定：{e}"
+                                 "（请勿重复提交，先与券商核对）", uncertain=True)
         repo.upsert_order(placed, db_path=self.db_path)
         self._publish(EventType.ORDER, placed)
         return placed
@@ -471,8 +503,7 @@ class RiskGate:
     def reject(self, order_id: str) -> Order:
         with self._lock:
             o = self._pending_confirm.pop(order_id, None)
-            self._armed_at.pop(order_id, None)
-            self._pending_targets.pop(order_id, None)
+            self._armed_broker.pop(order_id, None)
         if o is None:
             raise ValueError(f"订单 {order_id} 不在待确认队列")
         o = _replace(o, status=OrderStatus.REJECTED, message="用户拒绝（二次确认）")
@@ -522,6 +553,49 @@ class RiskGate:
         repo.upsert_order(o, db_path=self.db_path)     # 拦截落库，可查原因
         self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
         return o
+
+    def _fail(self, o: Order, message: str, uncertain: bool = False) -> Order:
+        """确认作废/断线/委托失败：状态与原因都要落库，不能只把单子从队列里摘掉。"""
+        o = _replace(o, status=OrderStatus.FAILED, message=message)
+        repo.upsert_order(o, db_path=self.db_path)
+        if uncertain:
+            repo.mark_uncertain(o.order_id, db_path=self.db_path)   # 结果不明：先核对再决定
+        self._publish(EventType.RISK, {"action": "rejected", "order": _to_dict(o)})
+        return o
+
+    def _expire(self, o: Order, message: str) -> Order:
+        o = _replace(o, status=OrderStatus.EXPIRED_CONFIRM, message=message)
+        repo.upsert_order(o, db_path=self.db_path)
+        self._publish(EventType.RISK, {"action": "expired", "order": _to_dict(o)})
+        return o
+
+    @staticmethod
+    def _channel_id(broker) -> str:
+        return str(getattr(broker, "name", "") or "")
+
+    @staticmethod
+    def _account_fingerprint(broker) -> str:
+        """资金账户指纹（sha256 截断）：明文账号不入库、不进日志（宪法第 7 条）。
+
+        通道给不出账户标识时是指纹(空串)——同一个值，跨重启仍然相等；它只表示
+        「这个通道不上报账户」，不代表已经核对过账户。
+        """
+        fn = getattr(broker, "account_identity", None)
+        raw = ""
+        if callable(fn):
+            try:
+                raw = str(fn() or "")
+            except Exception:                          # noqa: BLE001 — 取不到就按未知
+                raw = ""
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def _ruleset_version(self) -> str:
+        """闸② 这一笔真正用到的规则口径：常量表 + 本闸实际生效的费用参数。
+
+        只报常量表会把「设置页改了费率」当成没改——那正是确认票该发现的事。
+        """
+        fee = "|".join(f"{k}={v}" for k, v in sorted(vars(self.fee).items()))
+        return f"{constants.ruleset_version()}+{hashlib.sha256(fee.encode()).hexdigest()[:8]}"
 
     def _publish(self, etype: EventType, data) -> None:
         if self.bus is not None:

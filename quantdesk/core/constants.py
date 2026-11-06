@@ -4,6 +4,8 @@
 费率以券商实际为准。
 """
 
+import hashlib
+
 from quantdesk.core.enums import Board
 
 # 涨跌停幅度：主板 ±10% / 创业板·科创板 ±20% / 北交所 ±30%；ST ±5%
@@ -120,3 +122,19 @@ def lot_rule_text(board: Board) -> str:
     if board is Board.HK:
         return "港股按 1 股递增模拟（实际下单须凑整到该股每手股数，100~2000 股不等）"
     return "买入须为 100 股整数倍"
+
+
+def ruleset_version() -> str:
+    """本表规则口径的指纹（闸③ 确认判据之一，K01）。
+
+    待确认单是照「武装那一刻的规则表」过闸②的。表在确认窗口里被改过（涨跌幅幅度、
+    整手/递增单位、T+1、ST 幅度），旧结论对新的委托就不再成立——所以规则版本必须
+    跟着委托落库，确认时对得上才投真钱。
+
+    费用参数不在这里：FeeCalculator 可被 config/设置页覆盖，那份变化由
+    `riskgate._ruleset_version()` 拼进来，避免「常量没动就等于规则没动」的自欺。
+    """
+    parts = [f"{b.value}:{min_volume(b)}:{lot_step(b)}:{is_t_plus_1(b)}:{limit_pct(b)}"
+             for b in (Board.MAIN, Board.GEM, Board.STAR, Board.BSE, Board.HK)]
+    parts += [f"ST_PCT={ST_PCT}", f"LOT_SIZE={LOT_SIZE}", f"PRICE_TICK={PRICE_TICK}"]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:12]

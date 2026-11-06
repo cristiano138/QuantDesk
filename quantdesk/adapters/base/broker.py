@@ -62,3 +62,11 @@ class BrokerAdapter(ABC):
     # ---------- 可选 ----------
     def poll(self) -> None:
         """无回调能力（如 easytrader）的通道实现轮询刷新；回调型通道留空。"""
+
+    def account_identity(self) -> str:
+        """这条连接当前服务的账户标识（对账与确认身份用）。
+
+        RiskGate 只把它折成指纹跟着待确认单落库——换了资金账号，旧的确认必须作废，
+        判据不能只活在进程内存里。通道不上报时返回空串（= 身份未知，不等于已核对）。
+        """
+        return ""

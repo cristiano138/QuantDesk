@@ -180,6 +180,26 @@ Account{total_asset, cash, market_value, frozen, updated_at}
 
 ## 当前项目状态（每日更新此节）
 
+2026-11-06（同日续 3）· **K01 确认判据落库 + APK 版本唯一事实源**（按
+`docs/Qoder优化执行提示词.md` 的 K01–K12 顺序推进；逐文件明细见 `docs/优化执行记录.md`）。
+
+- **闸③ 的判据不再只活在进程内存里**：武装确认时把「截止时间（UTC 毫秒绝对值）、模式、通道、
+  资金账户指纹（sha256 截断，明文不入库）、规则版本」写进委托行，`confirm()` 当场按这份事实判定。
+  于是清理线程停不停不影响过期结论；重启后同身份可继续确认（旧口径是全部作废重下），
+  换通道/换账号/规则改版仍一律 fail-closed 作废。
+- **重复与并发确认**靠 `UPDATE orders SET status='submitted' WHERE status='pending_confirm'`
+  的原子转换挡住，且这条转换同时是「先落意图再调券商」的边界：进程在券商返回前死掉，
+  重启看到的是 `submitted` 而不是待确认，不会被重发。断线只记 `result_uncertain=1`
+  （`repo.list_uncertain()` 可查、重启只广播不自动重发）；券商明确拒绝不算不确定。
+- **老库升级语义**：新增列由 `ensure_columns` 补默认值 = 「判据缺失」，旧待确认单确认时明确作废，
+  不猜身份、不重开窗口（有真实旧库用例锁住这条）。
+- 通道合同新增可选 `account_identity()`（qmt/gm 已实现，easytrader 无可上报账号 → 按身份未知处理）；
+  `ruleset_version()` 给规则口径做指纹，确认时对不上就作废。手册与 README 随行为更正。
+- APK：清单里写死的版本号会顶掉 `aapt2 link` 参数（包内 1.0、源码 1.2 → 覆盖安装被系统拒绝，
+  用户手里留的是旧页）。现由 `android/build.py` 单一注入并在出包后回读断言，产物 1.3/code 3。
+- 验收：新增 `tests/test_confirm_ticket.py` 修前 9 failed → 修后 15 passed；关联复核 141 passed；
+  全量离线 892 collected、exit=0（1 deselected = network）。真实券商账号下的在线核对仍未执行。
+
 2026-11-06（同日续）· **全市场模拟买卖 + 自动更新轮**（用户：①「每一股票都可以模拟买卖，现在还有些
 买不了」②「加上自动更新功能，我一发布就可以自动更新」）。
 

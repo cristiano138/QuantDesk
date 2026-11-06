@@ -149,6 +149,112 @@ def list_orders(status: OrderStatus | str | None = None, strategy_id: str | None
         return [_row_to_order(r) for r in rows]
 
 
+# ---------- 闸③ 确认判据（K01：判据落库，重启后按同一份事实判定） ----------
+def arm_confirm(order_id: str, *, mode: str, channel: str, account: str,
+                rules: str, deadline_ms: int, db_path=None) -> None:
+    """武装一次确认：把「凭什么时候、什么身份、哪套规则过的闸②」写进委托行。
+
+    这些字段只在确认流里有意义，不参与 `upsert_order` 的常规覆盖（那边有字段白名单）——
+    否则回报落库时会把判据一起清掉，重启后无从核对。
+    """
+    with _write_lock, get_session(db_path) as s:
+        row = s.get(OrderRow, order_id)
+        if row is None:
+            return
+        row.confirm_mode = mode
+        row.confirm_channel = channel
+        row.confirm_account = account
+        row.confirm_rules = rules
+        row.confirm_deadline = int(deadline_ms)
+        s.add(row)
+        s.commit()
+
+
+def confirm_context(order_id: str, db_path=None) -> dict | None:
+    """取回武装时落库的判据；从未武装过（老库直写的待确认单）返回 None。"""
+    with get_session(db_path) as s:
+        row = s.get(OrderRow, order_id)
+        if row is None or not row.confirm_mode:
+            return None
+        return {
+            "mode": row.confirm_mode,
+            "channel": row.confirm_channel,
+            "account": row.confirm_account,
+            "rules": row.confirm_rules,
+            "deadline": int(row.confirm_deadline or 0),
+            "status": row.status,
+        }
+
+
+def claim_pending(order_id: str, db_path=None) -> bool:
+    """原子把 pending_confirm 转成 submitted，返回是否由本次调用抢到。
+
+    两件事一起办：①重复确认/并发确认只允许一次投递（状态转换在 SQL 的 WHERE 里，
+    不靠进程内那把锁）；②先落意图再调券商——进程在券商执行后、结果落库前死掉，
+    重启看到的是 submitted（不是待确认），不会被当成旧确认重发一遍真钱委托。
+    """
+    from sqlalchemy import text
+
+    with _write_lock, get_session(db_path) as s:
+        r = s.execute(
+            text("UPDATE orders SET status='submitted', updated_at=:ts "
+                 "WHERE order_id=:oid AND status='pending_confirm'"),
+            {"ts": now_ms(), "oid": order_id},
+        )
+        s.commit()
+        return r.rowcount == 1
+
+
+def expire_overdue_confirm(now: int, db_path=None) -> list[str]:
+    """按落库的绝对截止时间作废过期确认，返回真正被本次调用改状态的那批 order_id。
+
+    判据在库里，所以「清理线程有没有跑到」不再决定结果；已作废/已确认的单不匹配
+    WHERE，天然不会被二次改写。
+    """
+    from sqlalchemy import text
+
+    with _write_lock, get_session(db_path) as s:
+        ids = [x[0] for x in s.execute(
+            text("SELECT order_id FROM orders WHERE status='pending_confirm' "
+                 "AND confirm_deadline > 0 AND confirm_deadline <= :now"),
+            {"now": int(now)},
+        ).all()]
+        if not ids:
+            return []
+        won: list[str] = []
+        for oid in ids:
+            r = s.execute(
+                text("UPDATE orders SET status='expired_confirm', updated_at=:now, "
+                     "message=:msg WHERE order_id=:oid AND status='pending_confirm'"),
+                {"now": int(now), "oid": oid, "msg": "二次确认超时自动作废"},
+            )
+            if r.rowcount == 1:
+                won.append(oid)                  # 被别人先改了就不冒充本次作废
+        s.commit()
+        return won
+
+
+def mark_uncertain(order_id: str, db_path=None) -> None:
+    """标记「委托结果不明」：通道在投递途中断线，券商那边可能已经收下这一笔。"""
+    with _write_lock, get_session(db_path) as s:
+        row = s.get(OrderRow, order_id)
+        if row is None:
+            return
+        row.result_uncertain = 1
+        s.add(row)
+        s.commit()
+
+
+def list_uncertain(db_path=None, limit: int = 200) -> list[Order]:
+    """结果不明的委托必须查得到——不能从待确认队列里摘掉就当没发生过。"""
+    with get_session(db_path) as s:
+        rows = s.exec(
+            select(OrderRow).where(OrderRow.result_uncertain == 1)
+            .order_by(OrderRow.updated_at.desc()).limit(limit)
+        ).all()
+        return [_row_to_order(r) for r in rows]
+
+
 # ---------- 成交 ----------
 def _trade_to_row(t: Trade) -> TradeRow:
     return TradeRow(

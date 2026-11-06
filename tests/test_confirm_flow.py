@@ -159,8 +159,13 @@ def test_timeout_auto_expires(tmp_path):
     assert live.placed == []
 
 
-def test_restart_pending_survives_but_requires_new_channel_confirmation(tmp_path):
-    """待确认记录重启不丢；缺少原通道身份时不能把旧确认投递到新连接。"""
+def test_restart_pending_survives_and_identity_is_checked_from_the_ticket(tmp_path):
+    """待确认记录重启不丢；能不能确认，看落库那份判据和当前通道对不对得上（K01）。
+
+    这一条原来断言「重启后一律确认不了」——那是身份只存在进程内存时的临时口径：
+    老实用户的待确认单在新进程里永远核对不上，只能全部作废重下。判据落库后
+    同通道同账户应可确认，换通道才作废。
+    """
     init_db(tmp_path / "r.db")
     live1 = MockLiveBroker()
     live1.connect()
@@ -178,11 +183,22 @@ def test_restart_pending_survives_but_requires_new_channel_confirmation(tmp_path
                      store=_mk_prev_close_store(tmp_path), confirm_timeout_s=0.0)
     n = gate2.restore_pending()
     assert n == 2                                  # 待确认单仍在
-    out = gate2.confirm("R1")                      # 且可处理
-    assert out.status == OrderStatus.FAILED
-    assert live2.placed == []
-    assert "重新提交" in out.message
+    out = gate2.confirm("R1")                      # 同一通道同一账户：按落库判据放行
+    assert out.status == OrderStatus.FILLED
+    assert len(live2.placed) == 1
     assert get_order("R2", db_path=tmp_path / "r.db").status == "pending_confirm"
+    # 换了通道（装机上真的换了一条连接）：旧确认作废，也不悄悄替用户新建模拟成交
+    live3 = MockLiveBroker()
+    live3.name = "qmt"
+    live3.connect()
+    gate3 = RiskGate(live_broker=live3, settings=StubSettings(False),
+                     db_path=tmp_path / "r.db",
+                     store=_mk_prev_close_store(tmp_path), confirm_timeout_s=0.0)
+    gate3.restore_pending()
+    out2 = gate3.confirm("R2")
+    assert out2.status == OrderStatus.FAILED and "通道" in out2.message
+    assert live3.placed == []
+    assert get_order("R2", db_path=tmp_path / "r.db").status == "failed"
 
 
 def test_confirm_after_switching_to_paper_never_calls_live(env):
@@ -214,23 +230,33 @@ def test_confirm_never_switches_to_another_broker(env):
 
 
 def test_confirm_checks_expiry_even_if_background_worker_is_stopped(env):
+    """过期判定用落库的绝对截止时间：清理线程有没有跑到，不决定结果。"""
     import time
 
+    from quantdesk.store import repo
+
     gate = env["gate"]
-    gate.confirm_timeout_s = 10
+    gate.confirm_timeout_s = 0.3                   # env 故意不起超时线程，这里只给窗口
     gate.submit(mk_order("LATE"))
-    gate._armed_at["LATE"] = time.monotonic() - 11
+    time.sleep(0.35)
     out = gate.confirm("LATE")
     assert out.status == OrderStatus.EXPIRED_CONFIRM
     assert env["live"].placed == []
+    assert repo.confirm_context("LATE", db_path=env["tmp"] / "c.db")["status"] \
+        == "expired_confirm"
 
 
 def test_restore_pending_does_not_extend_confirmation_window(env):
+    """恢复只把同一份截止时间读回来：不重开窗口，也不因为换了进程就再给一次机会。"""
+    from quantdesk.store import repo
+
     gate = env["gate"]
+    gate.confirm_timeout_s = 30
     gate.submit(mk_order("RESTORE"))
-    armed = gate._armed_at["RESTORE"]
+    before = repo.confirm_context("RESTORE", db_path=env["tmp"] / "c.db")["deadline"]
     gate.restore_pending()
-    assert gate._armed_at["RESTORE"] == armed
+    after = repo.confirm_context("RESTORE", db_path=env["tmp"] / "c.db")["deadline"]
+    assert after == before
 
 
 def test_disconnected_fail_closed_reject(env):

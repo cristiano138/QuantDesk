@@ -420,6 +420,10 @@ class QmtBroker(BrokerAdapter):
             frozen=float(_attr(raw, "frozen_cash", "frozen", default=0.0) or 0.0),
             updated_at=now_ms())
 
+    def account_identity(self) -> str:
+        """登录用的资金账号（RiskGate 只取指纹，明文不入库不进日志）。"""
+        return self._account_id if self._connected else ""
+
     def get_position(self, symbol: str | None = None) -> list[Position]:
         """持仓：available **必须取 can_use_volume**（T+1 语义的落点，宪法第 2 道闸依赖它）。"""
         self._require_live()

@@ -49,6 +49,15 @@ class OrderRow(SQLModel, table=True):
     message: str = ""
     created_at: int = 0
     updated_at: int = 0
+    # ---- 闸③ 确认判据（K01）：判定要靠这份落库的事实，不靠进程内存 ----
+    # 老库由 store/db.ensure_columns 补列，补出来是默认值 = 「从未武装过」，
+    # 这种待确认单确认时一律 fail-closed 作废，绝不猜身份、不重开确认窗口。
+    confirm_deadline: int = Field(default=0)   # UTC 毫秒绝对截止；0 = 无截止时间
+    confirm_mode: str = ""                     # live（模拟路径没有确认流）
+    confirm_channel: str = ""                  # 通道标识（适配器 name）
+    confirm_account: str = ""                  # 账户指纹（sha256 截断，不存明文账号）
+    confirm_rules: str = ""                    # 武装时的规则口径版本
+    result_uncertain: int = Field(default=0)   # 1 = 委托结果不明，重启先核对券商不盲重发
 
 
 class TradeRow(SQLModel, table=True):

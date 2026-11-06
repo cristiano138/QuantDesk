@@ -577,6 +577,10 @@ class GmBroker(BrokerAdapter):
             raise BrokerError(f"gm 调用异常: {exc.__class__.__name__}: {exc}") from exc
         return task.result
 
+    def account_identity(self) -> str:
+        """掘金账号标识（终端绑定关系里的那串）；未登录时返回空串。"""
+        return self.account_id if self._connected else ""
+
     def _require_live(self) -> None:
         if not self._connected:
             raise ConnectionLostError("gm 通道未连接")
