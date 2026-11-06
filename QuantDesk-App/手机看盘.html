@@ -337,6 +337,7 @@ input::placeholder{color:var(--muted)}
    =================================================================== */
 
 var LS = {pool:'qd.pool.v1', src:'qd.source.v1', iv:'qd.interval.v1', names:'qd.names.v1'};
+var SIM_KEY = 'qd.sim.v3';  // 必须在 state.sim = loadSim() 之前赋值，var 声明提升不会提升赋值。
 var DEFAULT_POOL = ['600000.SH','000001.SZ','600519.SH','300750.SZ',
                     '00700.HK','09988.HK','03690.HK','01810.HK'];
 
@@ -432,7 +433,6 @@ function qdGo(cmd) {
    A股 / B股 / 港股都能模拟买：币种、费用、整手、T+1、涨跌停各按各自市场的规则来。
    规则口径与电脑端 riskgate.py 一致，两边不各写一套。 */
 
-var SIM_KEY = 'qd.sim.v3';
 var CASH0 = 1000000;                    // 每个币种独立的虚拟额度（不做任何汇率换算）
 var CUR_UNIT = {CNY: '元', USD: '美元', HKD: '港币'};
 
@@ -674,6 +674,9 @@ function maxAffordable(sym, price, feeRate) {
 /* 这一条是下单路径上唯一的规则判据：预估与确认都调它，两边不可能出现「预估说行、确认没查」。
    按钮 disabled 只是表现层——脚本、旧缓存页或一次竞态都可能点到禁用按钮，规则不许跟着一起被绕过。 */
 function orderReject(sym, side, price, vol) {
+  if (!isFinite(price) || price <= 0) return '委托价格必须是大于 0 的有限数值';
+  if (!isFinite(vol) || vol <= 0 || Math.floor(vol) !== vol) return '数量必须是大于 0 的整数';
+  if (side !== 'buy' && side !== 'sell') return '委托方向只能是买入或卖出';
   var u = unitOf(sym);
   var r = state.rows[sym] || {};
   var band = limitBand(sym, r);
@@ -683,8 +686,8 @@ function orderReject(sym, side, price, vol) {
   var fee = simFees(amount, side, sym);
   if (band.up != null && band.down != null && (price > band.up + 1e-9 || price < band.down - 1e-9))
     return '委托价超出涨跌停区间 [' + band.down.toFixed(dg) + ', ' + band.up.toFixed(dg) + ']（' + band.basis + '）';
-  if (vol < q.min) return '数量不足：' + q.text;
-  if (q.check && vol % q.step !== 0) return '数量须为 ' + q.step + ' 股整数倍（' + q.text + '）';
+  if (side === 'buy' && vol < q.min) return '数量不足：' + q.text;
+  if (side === 'buy' && q.check && vol % q.step !== 0) return '数量须为 ' + q.step + ' 股整数倍（' + q.text + '）';
   if (side === 'sell' && vol > simAvail(sym))
     return tPlus1Of(sym) ? '可卖不足：当日买入 T+1（可卖 ' + simAvail(sym) + '）'
                         : '可卖不足（可卖 ' + simAvail(sym) + '）';
@@ -977,7 +980,11 @@ function loadScript(url, charset, timeoutMs) {
     }, timeoutMs || 8000);
     s.src = url;
     if (charset) s.charset = charset;
-    s.onload = function () { if (done) return; done = true; clearTimeout(tm); resolve(); };
+    s.onload = function () {
+      if (done) return; done = true; clearTimeout(tm);
+      if (s.parentNode) s.parentNode.removeChild(s);
+      resolve();
+    };
     s.onerror = function () {
       if (done) return; done = true; clearTimeout(tm);
       if (s.parentNode) s.parentNode.removeChild(s);
@@ -2407,7 +2414,9 @@ function restartTimer() {
 function loadPool() {
   try {
     var raw = JSON.parse(localStorage.getItem(LS.pool) || 'null');
-    if (Array.isArray(raw) && raw.length) return raw.filter(function (s) { return normalize(s); });
+    if (Array.isArray(raw)) return raw.map(normalize).filter(function (s, i, all) {
+      return s && all.indexOf(s) === i;
+    });
   } catch (e) {}
   return DEFAULT_POOL.slice();
 }
