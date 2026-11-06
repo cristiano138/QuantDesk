@@ -8,6 +8,13 @@ QuantDesk 本地版使用说明（手机 App + 电脑 App）
   电脑 → QuantDesk-安装程序.exe → 桌面与开始菜单出现「QuantDesk 看盘台」图标
   安卓 → QuantDesk.apk → 手机桌面出现「QuantDesk 看盘」图标
 
+别的地方下载（不用拿到这台电脑）：
+  发布页  https://github.com/cristiano138/QuantDesk/releases/tag/v1.3
+  安卓包  .../releases/download/v1.3/QuantDesk.apk
+  iPhone  .../releases/download/v1.3/QuantDesk-iPhone.html（Safari 打开 → 添加到主屏幕）
+  电脑整包 .../releases/download/v1.3/QuantDesk-PC.zip（含界面，仍需本机已有 Python 环境）
+  更新清单 .../releases/download/v1.3/update.json（软件内置「自动更新」取的就是这个）
+
 
 一、电脑上怎么装、怎么用
 ------------------------------------------------
@@ -35,7 +42,7 @@ QuantDesk 本地版使用说明（手机 App + 电脑 App）
 
 二、手机上怎么装
 ------------------------------------------------
-【安卓】装 QuantDesk-看盘-1.0.apk（约 53 KB，很小，因为它只是外壳 + 一个页面）
+【安卓】装 QuantDesk.apk（1.3 版，约 85 KB，很小，因为它只是外壳 + 一个页面）
   1. 把这个 .apk 传到手机：微信「文件传输助手」发给自己、数据线拷贝、或你自己的网盘。
   2. 在手机上点开它，系统会提示「不允许安装未知来源应用」——按提示允许这一次安装即可。
      （小米/华为/OPPO/vivo 的菜单名字略有不同，都在「设置 → 应用 → 特殊应用权限」这一类里。）
@@ -62,7 +69,7 @@ QuantDesk 本地版使用说明（手机 App + 电脑 App）
 QuantDesk-App\
   QuantDesk.exe                 电脑端 App 入口（双击打开软件）
   QuantDesk-安装程序.exe         电脑端安装（图标 + 「应用」列表登记）
-  QuantDesk-看盘-1.0.apk         手机端 App（安卓直接安装）
+  QuantDesk.apk                  手机端 App（安卓直接安装，当前 1.3 / 版本 code 3）
   手机看盘.html                 手机页面本体（也是 APK 里随包的那一份；iPhone 用它）
   电脑端启动.bat                老的命令行启动方式，仍可用
   使用说明.txt                 本文

@@ -145,11 +145,16 @@ def build(notes: str, print_command: bool) -> dict:
     print(f"整包：{zip_path}（{manifest['pc']['size']:,} 字节，{len(members)} 个文件）")
     print(f"APK ：{APK_PATH}（{manifest['android']['size']:,} 字节）")
     if print_command:
+        tag = "v" + manifest["version"]
+        iphone = os.path.join(HERE, "手机看盘.html")
         print("\n发布命令（自己执行，本脚本不代你上传）：\n"
-              "  gh release upload app-1.0 --clobber "
-              f'"{zip_path}" "{APK_PATH}" "{out}"')
-        print("  # 无 gh 时：仓库页面上手动把这三个文件拖到同一个 Release 的资源区"
-              "（清单里的下载地址就是这两个文件名，改名客户端就取不到了）")
+              f"  gh release create {tag} --target main --title \"QuantDesk {manifest['version']}\""
+              " --notes-file <说明文件>")
+        print("  gh release upload %s --clobber "
+              '"%s" "%s" "%s" "%s"' % (tag, APK_PATH, zip_path, out, iphone))
+        print("  # 无 gh 时：仓库页面上手动把这四个文件拖到同一个 Release 的资源区"
+              "（清单里的下载地址就是这两个文件名，改名客户端就取不到了；"
+              "iPhone 那份建议在上传框里改名成 QuantDesk-iPhone.html）")
     return manifest
 
 
