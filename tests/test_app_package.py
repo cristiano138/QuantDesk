@@ -75,3 +75,17 @@ def test_page_order_path_checks_rules_before_filling():
 def test_backend_and_android_versions_are_one_number():
     assert f'VERSION_NAME = "{__version__}"' in _read("android", "build.py"), \
         f"安卓 VERSION_NAME 与后端 __version__={__version__} 不一致"
+
+
+def test_apk_version_has_one_source_and_is_injected():
+    """版本号只许在 android/build.py 定义一次，由它注入构建副本。
+
+    实测踩过：清单自带旧值时，aapt2 link 的构建参数被顶掉，源码升到 1.3、装出来的包还是 1.2，
+    老 App 比较 version_code 认为「我就是最新」，从此收不到任何更新，而界面上一切正常。
+    """
+    manifest = _read("android", "AndroidManifest.xml")
+    assert "android:versionCode" not in manifest, "清单里不要再写 versionCode，唯一事实源是 android/build.py"
+    assert "android:versionName" not in manifest, "清单里不要再写 versionName，唯一事实源是 android/build.py"
+    build = _read("android", "build.py")
+    assert 'manifest.index(">", manifest.index("<manifest"))' in build, "没有把版本号注入构建副本"
+    assert "版本核对" in build and "页面核对" in build, "出包后没有回读包体断言版本与随包页面一致"

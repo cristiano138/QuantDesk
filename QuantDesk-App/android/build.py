@@ -10,6 +10,7 @@
 工作区里只留成品 APK 和这几份源码。
 """
 import glob
+import io
 import os
 import shutil
 import subprocess
@@ -26,8 +27,8 @@ KEY_PASS = "quantdesk"
 
 MIN_SDK = "21"
 TARGET_SDK = "33"
-VERSION_CODE = "2"
-VERSION_NAME = "1.2"
+VERSION_CODE = "3"
+VERSION_NAME = "1.3"
 ICON_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
 
@@ -108,7 +109,16 @@ def main():
     print("工具链：%s" % root)
 
     # 1) 工程搬到纯 ASCII 路径构建（cmd 对中文路径的批处理解析不可靠）
-    shutil.copy2(os.path.join(HERE, "AndroidManifest.xml"), work)
+    #    顺带把版本号注入这份副本：仓库清单不带版本属性，唯一事实源是本文件的 VERSION_CODE/VERSION_NAME
+    manifest = io.open(os.path.join(HERE, "AndroidManifest.xml"), encoding="utf-8").read()
+    if "android:versionCode" in manifest or "android:versionName" in manifest:
+        sys.exit("AndroidManifest.xml 里不要再写 versionCode/versionName——两处都会写就一定会漂")
+    head = manifest.index(">", manifest.index("<manifest"))   # 从 <manifest 起找，别落在第一行的 ?> 上
+    manifest = (manifest[:head]
+                + '\n    android:versionCode="%s" android:versionName="%s"' % (VERSION_CODE, VERSION_NAME)
+                + manifest[head:])
+    with io.open(os.path.join(work, "AndroidManifest.xml"), "w", encoding="utf-8", newline="") as f:
+        f.write(manifest)
     shutil.copytree(os.path.join(HERE, "src"), os.path.join(work, "src"))
     shutil.copytree(os.path.join(HERE, "res"), os.path.join(work, "res"))
     make_icons(os.path.join(work, "res"))
@@ -183,6 +193,26 @@ def main():
     for line in badge.splitlines():
         if line.startswith(("package:", "application-label:", "launchable-activity:", "sdkVersion", "targetSdkVersion", "uses-permission")):
             print("  " + line)
+
+    # 出包后回读真实包体：版本号与随包页面必须与源码对上。
+    # 「HTML 已修但 APK 里还是旧页面」「VERSION 升了但包里还是旧码」都属于报了更新、用户没拿到更新。
+    import re
+    pkg = re.search(r"package: name='[^']*' versionCode='(\d+)' versionName='([^']*)'", badge)
+    if not pkg:
+        sys.exit("包内读不到 versionCode/versionName，不出成品")
+    got_code, got_name = pkg.group(1), pkg.group(2)
+    if (got_code, got_name) != (VERSION_CODE, VERSION_NAME):
+        sys.exit("包内版本是 %s/%s，源码声明的是 %s/%s——清单里不要自带 versionCode/versionName，"
+                 "它们会顶掉 aapt2 link 的构建参数" % (got_code, got_name, VERSION_CODE, VERSION_NAME))
+    print("  版本核对：包内 %s/%s == 源码 %s/%s" % (got_code, got_name, VERSION_CODE, VERSION_NAME))
+
+    with zipfile.ZipFile(os.path.join(work, "final.apk")) as z:
+        packed = z.read("assets/index.html")
+    src = open(HTML_SOURCE, "rb").read()
+    if packed != src:
+        sys.exit("包内 assets/index.html 与 %s 不一致（%d vs %d 字节），不出成品"
+                 % (os.path.basename(HTML_SOURCE), len(packed), len(src)))
+    print("  页面核对：包内 assets/index.html 与 手机看盘.html 逐字节一致（%d 字节）" % len(packed))
 
     shutil.copy2(os.path.join(work, "final.apk"), OUT_APK)
     print("\n成品：%s（%.0f KB）" % (OUT_APK, os.path.getsize(OUT_APK) / 1024))
